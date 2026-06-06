@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PantryDeal — cheapest groceries for tonight's dinner</title>
+  <meta
+    name="description"
+    content="Tell PantryDeal a dinner and how many people. It prices the whole recipe at every store nearby using current flyer deals and finds the cheapest cart."
+  />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M5 14.5 14.5 5a3 3 0 0 1 4.2 0l8.3 8.3a3 3 0 0 1 0 4.2l-9.5 9.5a3 3 0 0 1-4.2 0L5 18.7a3 3 0 0 1 0-4.2Z' fill='%231d8a4f'/%3E%3Ccircle cx='11.5' cy='11.5' r='2.4' fill='white'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="PantryDeal home">
+      <span class="brand__mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="28" height="28">
+          <path d="M5 14.5 14.5 5a3 3 0 0 1 4.2 0l8.3 8.3a3 3 0 0 1 0 4.2l-9.5 9.5a3 3 0 0 1-4.2 0L5 18.7a3 3 0 0 1 0-4.2Z" fill="currentColor"/>
+          <circle cx="11.5" cy="11.5" r="2.4" fill="var(--card)"/>
+        </svg>
+      </span>
+      <span class="brand__word">Pantry<span class="brand__word-accent">Deal</span></span>
+    </a>
+    <p class="topbar__tag">Tonight's dinner, for the lowest cart in town.</p>
+  </header>
+
+  <main class="wrap">
+    <!-- SEARCH -->
+    <section class="search" aria-label="Find deals">
+      <form id="searchForm" class="search__form" novalidate>
+        <div class="field field--dinner">
+          <label for="dinner">What's for dinner?</label>
+          <input id="dinner" name="dinner" type="text" placeholder="butter chicken" required />
+          <div class="chips" id="dinnerChips" aria-hidden="false"></div>
+        </div>
+
+        <div class="field field--zip">
+          <label for="zip">Postal code</label>
+          <input id="zip" name="zip" type="text" inputmode="text" autocomplete="postal-code" placeholder="M8Y 3N5" required />
+        </div>
+
+        <div class="field field--people">
+          <label for="people">People</label>
+          <div class="stepper" role="group" aria-label="Number of people">
+            <button type="button" class="stepper__btn" data-step="-1" aria-label="Fewer people">–</button>
+            <input id="people" name="people" type="number" min="1" max="20" value="4" inputmode="numeric" />
+            <button type="button" class="stepper__btn" data-step="1" aria-label="More people">+</button>
+          </div>
+        </div>
+
+        <div class="field field--source">
+          <span class="field__label-static">Data source</span>
+          <div class="segmented" role="radiogroup" aria-label="Data source">
+            <input type="radio" id="src-sample" name="source" value="sample" checked />
+            <label for="src-sample">Sample</label>
+            <input type="radio" id="src-live" name="source" value="live" />
+            <label for="src-live">Live<span class="dot" aria-hidden="true"></span></label>
+            <span class="segmented__thumb" aria-hidden="true"></span>
+          </div>
+        </div>
+
+        <button type="submit" class="btn-search" id="searchBtn">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="m20 20-3.5-3.5M18 11a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z"/></svg>
+          <span>Find the cheapest cart</span>
+        </button>
+      </form>
+
+      <div class="recents" id="recents" hidden>
+        <span class="recents__label">Recent</span>
+        <div class="recents__list" id="recentsList"></div>
+      </div>
+    </section>
+
+    <!-- EMPTY STATE -->
+    <section class="state state--empty" id="emptyState">
+      <div class="state__art" aria-hidden="true">
+        <svg viewBox="0 0 120 100" width="128" height="107" fill="none">
+          <path d="M28 38h64l-5 50a8 8 0 0 1-8 7H41a8 8 0 0 1-8-7l-5-50Z" stroke="#c7c7cc" stroke-width="2.5"/>
+          <path d="M45 44V32a15 15 0 0 1 30 0v12" stroke="#c7c7cc" stroke-width="2.5" stroke-linecap="round"/>
+          <circle cx="60" cy="66" r="11" fill="var(--green-bg)" stroke="var(--green)" stroke-width="2.5"/>
+          <path d="m55.5 66 3 3 6-6.5" stroke="var(--green)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <h2>Let's fill a cart for less.</h2>
+      <p>Tell us tonight's dinner, your postal code, and how many you're feeding. We'll price the whole recipe at every store nearby and find the cheapest.</p>
+    </section>
+
+    <!-- LOADING -->
+    <section class="state state--loading" id="loadingState" hidden aria-live="polite">
+      <div class="loader__head">
+        <span class="spinner" aria-hidden="true"></span>
+        <span id="loadingMsg">Checking weekly flyers…</span>
+      </div>
+      <div class="skeleton skeleton--recipe"></div>
+      <div class="skeleton skeleton--hero"></div>
+      <div class="skeleton skeleton--row"></div>
+      <div class="skeleton skeleton--row"></div>
+      <div class="skeleton skeleton--row"></div>
+    </section>
+
+    <!-- NO RESULTS -->
+    <section class="state state--none" id="noResults" hidden>
+      <h2>Hmm, nothing matched.</h2>
+      <p id="noResultsMsg">We couldn't price that one. Try a different dinner or postal code.</p>
+    </section>
+
+    <!-- RESULTS -->
+    <section class="results" id="results" hidden>
+      <!-- recipe -->
+      <article class="card recipe" id="recipeCard">
+        <div class="recipe__head">
+          <span class="eyebrow">Tonight's recipe</span>
+          <h2 id="recipeName">—</h2>
+          <p class="recipe__meta" id="recipeMeta">—</p>
+        </div>
+        <ul class="recipe__ings" id="recipeIngs"></ul>
+      </article>
+
+      <!-- hero / the plan headline -->
+      <article class="card hero" id="heroCard">
+        <div class="hero__ribbon" id="heroRibbon">Cheapest way to shop</div>
+        <div class="hero__body">
+          <div class="hero__store">
+            <div>
+              <h3 id="heroStore">—</h3>
+              <p class="hero__sub" id="heroSub">—</p>
+            </div>
+          </div>
+          <div class="hero__price">
+            <span class="hero__currency">$</span>
+            <span class="hero__total" id="heroTotal">0.00</span>
+          </div>
+        </div>
+        <div class="hero__foot">
+          <span class="save-pill" id="savePill">—</span>
+          <span class="hero__deals" id="heroDeals">—</span>
+        </div>
+      </article>
+
+      <!-- one trip card per store (filled by JS) -->
+      <div id="tripsContainer"></div>
+
+      <!-- one-store option / deals / gaps -->
+      <div id="planExtras"></div>
+
+      <p class="others__note" id="liveNote" hidden></p>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>PantryDeal · deals via Flipp (unofficial) · recipes via AI · <span id="footStamp">sample data</span></p>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>

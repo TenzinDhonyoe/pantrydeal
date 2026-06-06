@@ -1,0 +1,36 @@
+{
+  "name": "pantrydeal",
+  "version": "0.0.1",
+  "description": "Given a postal code and a free-text dinner, find the single nearby store where the recipe's ingredients are cheapest using current flyer deals.",
+  "type": "module",
+  "bin": {
+    "pantrydeal": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "web"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage",
+    "cli": "tsx src/cli.ts",
+    "serve": "tsx src/server.ts",
+    "serve:built": "node dist/server.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.10.2",
+    "@vitest/coverage-v8": "^2.1.8",
+    "eslint": "^9.17.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.1",
+    "vitest": "^2.1.8"
+  }
+}

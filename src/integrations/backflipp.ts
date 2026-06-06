@@ -1,0 +1,174 @@
+/**
+ * BackflippClient — LIVE flyer source over Flipp's unofficial "backflipp"
+ * endpoint (backflipp.wishabi.com). This endpoint is UNDOCUMENTED, UNOFFICIAL,
+ * and may change shape or disappear without notice. It is isolated behind the
+ * FlyerClient interface and is NEVER exercised by the test suite
+ * (docs/DECISIONS.md D1). No API key is required.
+ *
+ * Notes on the real response (verified live):
+ *  - The items/search endpoint requires a FULL 6-char postal code (the 3-char
+ *    FSA is rejected), so we pad a bare FSA to "<FSA> 1A1" (docs/DECISIONS.md D10).
+ *  - Items carry merchant_name/merchant_id but NO per-store coordinates. Flipp
+ *    already returns flyers local to the postal's FSA, so we treat each merchant
+ *    as one nearby store stamped at the geocoded postal location (D10).
+ *  - Price is current_price (a number) plus a unit in post_price_text
+ *    (e.g. "/lb 13.21/kg"); we reconstruct a string the normalizer understands.
+ */
+import type {
+  FlyerClient,
+  FlyerData,
+  FlyerItem,
+  Geocoder,
+  LatLng,
+  Store,
+} from '../core/types.js';
+
+const SEARCH_URL = 'https://backflipp.wishabi.com/flipp/items/search';
+
+/** Broad fallback search terms when none are supplied. */
+const DEFAULT_TERMS = [
+  'chicken',
+  'beef',
+  'milk',
+  'cheese',
+  'butter',
+  'tomato',
+  'onion',
+  'rice',
+  'pasta',
+  'bread',
+  'egg',
+];
+
+interface BackflippItem {
+  name?: string;
+  current_price?: number | string | null;
+  pre_price_text?: string | null;
+  post_price_text?: string | null;
+  sale_story?: string | null;
+  merchant_name?: string;
+  merchant_id?: number | string;
+  valid_from?: string;
+  valid_to?: string;
+  flyer_item_id?: number | string;
+}
+
+interface BackflippResponse {
+  items?: BackflippItem[];
+}
+
+export interface BackflippOptions {
+  /** Geocoder used to stamp store coordinates at the postal location. */
+  geocoder: Geocoder;
+  /** Search terms (typically the recipe's ingredient names). */
+  terms?: string[];
+  /** Country code for the locale (default CA). */
+  locale?: string;
+  fetchImpl?: typeof fetch;
+}
+
+/** Pad a bare 3-char FSA to a format-valid full postal code. */
+export function toFullPostal(postal: string): string {
+  const clean = postal.replace(/\s+/g, '').toUpperCase();
+  if (clean.length <= 3) return `${clean} 1A1`;
+  return `${clean.slice(0, 3)} ${clean.slice(3)}`;
+}
+
+/**
+ * Extract a size (weight/volume) embedded in a flyer item's name or price text,
+ * e.g. "LACTANTIA BUTTER, 454 G" -> "454 g", "...RICE, 4 KG" -> "4 kg",
+ * "...(500g) or..." -> "500 g". Returns undefined when none is found. This lets
+ * the normalizer price per-each items that would otherwise be unpriceable.
+ */
+export function extractSize(...texts: Array<string | null | undefined>): string | undefined {
+  const sizeRe = /(\d+(?:\.\d+)?)\s*(kg|g|gram|grams|lb|lbs|oz|ml|l|litre|liter)\b/i;
+  for (const text of texts) {
+    const m = (text ?? '').match(sizeRe);
+    if (m) return `${m[1]} ${m[2]!.toLowerCase()}`;
+  }
+  return undefined;
+}
+
+/** Reconstruct a normalizer-friendly price string from Flipp price fields. */
+export function buildRawPrice(item: BackflippItem): string {
+  const cur = item.current_price;
+  const post = (item.post_price_text ?? '').toString().trim();
+  const story = (item.sale_story ?? '').toString().trim();
+
+  // Per-weight pricing carried in post_price_text, e.g. "/lb 13.21/kg".
+  if (cur != null && cur !== '' && /\/\s*\d*\s*(lb|kg|oz|g)\b/i.test(post)) {
+    return `$${cur}${post.startsWith('/') ? '' : ' '}${post}`;
+  }
+  // Multi-buy carried in the sale story, e.g. "2/$5.00".
+  const multi = story.match(/\d+\s*\/\s*\$\s*\d+(?:\.\d+)?/);
+  if (multi) return multi[0];
+  // Plain price (no unit) — usually un-priceable per gram, surfaced as UNMATCHED.
+  if (cur != null && cur !== '') return `$${cur}`;
+  return '';
+}
+
+export class BackflippClient implements FlyerClient {
+  private readonly geocoder: Geocoder;
+  private readonly terms: string[];
+  private readonly locale: string;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(options: BackflippOptions) {
+    this.geocoder = options.geocoder;
+    this.terms = options.terms && options.terms.length > 0 ? options.terms : DEFAULT_TERMS;
+    this.locale = `en-${(options.locale ?? 'CA').toLowerCase()}`;
+    this.fetchImpl = options.fetchImpl ?? fetch;
+  }
+
+  async getDeals(postal: string): Promise<FlyerData> {
+    const origin: LatLng = await this.geocoder.geocodePostal(postal);
+    const fullPostal = toFullPostal(postal);
+
+    const storesById = new Map<string, Store>();
+    const items: FlyerItem[] = [];
+    const seenItemIds = new Set<string>();
+
+    for (const term of this.terms) {
+      const url =
+        `${SEARCH_URL}?locale=${encodeURIComponent(this.locale)}` +
+        `&postal_code=${encodeURIComponent(fullPostal)}&q=${encodeURIComponent(term)}`;
+      const res = await this.fetchImpl(url, { headers: { accept: 'application/json' } });
+      if (!res.ok) {
+        throw new Error(`Backflipp request failed (${res.status}) for term "${term}"`);
+      }
+      const body = (await res.json()) as BackflippResponse;
+
+      for (const raw of body.items ?? []) {
+        if (!raw.name || !raw.merchant_name) continue;
+        const itemId = String(raw.flyer_item_id ?? `${raw.merchant_id}:${raw.name}`);
+        if (seenItemIds.has(itemId)) continue;
+        seenItemIds.add(itemId);
+
+        const storeId = String(raw.merchant_id ?? raw.merchant_name);
+        if (!storesById.has(storeId)) {
+          storesById.set(storeId, {
+            storeId,
+            merchant: raw.merchant_name,
+            name: raw.merchant_name,
+            address: `Near ${fullPostal}`,
+            lat: origin.lat,
+            lng: origin.lng,
+          });
+        }
+
+        items.push({
+          name: raw.name,
+          rawPrice: buildRawPrice(raw),
+          size: extractSize(raw.name, raw.post_price_text),
+          merchant: raw.merchant_name,
+          storeIds: [storeId],
+          validFrom: raw.valid_from ?? '',
+          validTo: raw.valid_to ?? '',
+          sku: raw.flyer_item_id != null ? String(raw.flyer_item_id) : undefined,
+        });
+      }
+    }
+
+    return { stores: [...storesById.values()], items };
+  }
+}

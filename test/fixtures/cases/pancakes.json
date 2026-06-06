@@ -1,0 +1,9 @@
+{
+  "name": "Pancakes near M8Y",
+  "postal": "M8Y",
+  "dinner": "pancakes",
+  "flyer": "flyers/toronto.json",
+  "expectUnmatchedIncludes": [
+    "baking powder"
+  ]
+}

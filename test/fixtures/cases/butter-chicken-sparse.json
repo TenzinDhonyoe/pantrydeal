@@ -1,0 +1,11 @@
+{
+  "name": "Butter chicken with a sparse single store",
+  "postal": "M8Y",
+  "dinner": "butter chicken",
+  "flyer": "sparse-flyer.json",
+  "expectUnmatchedIncludes": [
+    "garam masala",
+    "ginger",
+    "garlic"
+  ]
+}

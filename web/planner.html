@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PantryDeal — affordable prediabetes meal plans</title>
+  <meta name="description" content="Turn a prediabetes eating plan into an affordable week of groceries within your budget using current local flyer deals." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M5 14.5 14.5 5a3 3 0 0 1 4.2 0l8.3 8.3a3 3 0 0 1 0 4.2l-9.5 9.5a3 3 0 0 1-4.2 0L5 18.7a3 3 0 0 1 0-4.2Z' fill='%231d8a4f'/%3E%3Ccircle cx='11.5' cy='11.5' r='2.4' fill='white'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/planner.html" aria-label="PantryDeal home">
+      <span class="brand__mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="28" height="28"><path d="M5 14.5 14.5 5a3 3 0 0 1 4.2 0l8.3 8.3a3 3 0 0 1 0 4.2l-9.5 9.5a3 3 0 0 1-4.2 0L5 18.7a3 3 0 0 1 0-4.2Z" fill="currentColor"/><circle cx="11.5" cy="11.5" r="2.4" fill="var(--card)"/></svg>
+      </span>
+      <span class="brand__word">Pantry<span class="brand__word-accent">Deal</span></span>
+    </a>
+    <p class="topbar__tag">An affordable week of prediabetes-friendly dinners on your budget.</p>
+  </header>
+
+  <div class="wrap">
+    <div class="draft-banner" role="note">
+      <strong>Draft, not medical advice.</strong> These meals follow general prediabetes
+      guidance and have not yet been signed off by a dietician. Review with your
+      dietician or doctor before using.
+    </div>
+  </div>
+
+  <main class="wrap">
+    <section class="search" aria-label="Plan a week">
+      <form id="planForm" class="search__form" novalidate>
+        <div class="field field--dinner">
+          <label for="budget">Weekly grocery budget ($)</label>
+          <input id="budget" name="budget" type="number" min="1" inputmode="decimal" placeholder="60" required />
+        </div>
+        <div class="field field--zip">
+          <label for="zip">Postal code</label>
+          <input id="zip" name="zip" type="text" autocomplete="postal-code" placeholder="M8Y 3N5" required />
+        </div>
+        <div class="field field--people">
+          <label for="people">People</label>
+          <div class="stepper" role="group" aria-label="Number of people">
+            <button type="button" class="stepper__btn" data-target="people" data-step="-1" aria-label="Fewer">–</button>
+            <input id="people" name="people" type="number" min="1" max="12" value="4" inputmode="numeric" />
+            <button type="button" class="stepper__btn" data-target="people" data-step="1" aria-label="More">+</button>
+          </div>
+        </div>
+        <div class="field" style="grid-column: 1 / -1; order: 4">
+          <label for="nights">Dinners (nights)</label>
+          <div class="stepper" role="group" aria-label="Number of dinners" style="max-width: 180px">
+            <button type="button" class="stepper__btn" data-target="nights" data-step="-1" aria-label="Fewer">–</button>
+            <input id="nights" name="nights" type="number" min="1" max="7" value="5" inputmode="numeric" />
+            <button type="button" class="stepper__btn" data-target="nights" data-step="1" aria-label="More">+</button>
+          </div>
+        </div>
+        <div class="field" style="grid-column: 1 / -1; order: 5">
+          <label for="restrictions">Restrictions (optional)</label>
+          <input id="restrictions" name="restrictions" type="text" placeholder="vegetarian, shellfish" />
+        </div>
+        <div class="field field--source" style="order: 6">
+          <span class="field__label-static">Data source</span>
+          <div class="segmented" role="radiogroup" aria-label="Data source">
+            <input type="radio" id="src-sample" name="source" value="sample" checked />
+            <label for="src-sample">Sample</label>
+            <input type="radio" id="src-live" name="source" value="live" />
+            <label for="src-live">Live<span class="dot" aria-hidden="true"></span></label>
+            <span class="segmented__thumb" aria-hidden="true"></span>
+          </div>
+        </div>
+        <button type="submit" class="btn-search" id="planBtn" style="order: 7">
+          <span>Build my affordable week</span>
+        </button>
+      </form>
+    </section>
+
+    <section id="status" class="status" hidden></section>
+    <section class="results" id="results" hidden>
+      <article class="card hero" id="heroCard">
+        <div class="hero__ribbon">Your week</div>
+        <div class="hero__body">
+          <div class="hero__store"><div><h3 id="heroDays">—</h3><p class="hero__sub" id="heroSub">—</p></div></div>
+          <div class="hero__price"><span class="hero__currency">$</span><span class="hero__total" id="heroTotal">0.00</span></div>
+        </div>
+        <div class="hero__foot">
+          <span class="save-pill" id="budgetPill">—</span>
+          <span class="hero__deals" id="heroNote">not medical advice</span>
+        </div>
+      </article>
+      <div id="mealsContainer"></div>
+      <p class="others__note" id="liveNote" hidden></p>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>PantryDeal · prediabetes meal affordability · deals via Flipp (unofficial) · draft content, review with your dietician</p>
+  </footer>
+
+  <script src="/planner.js"></script>
+</body>
+</html>

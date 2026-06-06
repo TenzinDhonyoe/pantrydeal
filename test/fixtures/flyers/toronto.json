@@ -1,0 +1,85 @@
+{
+  "stores": [
+    {
+      "storeId": "metro-etobicoke",
+      "merchant": "Metro",
+      "name": "Metro Etobicoke",
+      "address": "1530 The Queensway, Etobicoke",
+      "lat": 43.625,
+      "lng": -79.49
+    },
+    {
+      "storeId": "nofrills-etobicoke",
+      "merchant": "No Frills",
+      "name": "No Frills Etobicoke",
+      "address": "1240 Islington Ave, Etobicoke",
+      "lat": 43.61,
+      "lng": -79.51
+    },
+    {
+      "storeId": "loblaws-queensway",
+      "merchant": "Loblaws",
+      "name": "Loblaws Queensway",
+      "address": "1000 The Queensway, Etobicoke",
+      "lat": 43.625,
+      "lng": -79.52
+    },
+    {
+      "storeId": "sobeys-downtown",
+      "merchant": "Sobeys",
+      "name": "Sobeys Downtown",
+      "address": "120 King St W, Toronto",
+      "lat": 43.645,
+      "lng": -79.4
+    },
+    {
+      "storeId": "walmart-northyork",
+      "merchant": "Walmart",
+      "name": "Walmart North York",
+      "address": "900 Dufferin St, Toronto",
+      "lat": 43.77,
+      "lng": -79.41
+    }
+  ],
+  "items": [
+    { "name": "Boneless Skinless Chicken Breast", "rawPrice": "$5.99/lb", "merchant": "Metro", "storeIds": ["metro-etobicoke", "loblaws-queensway", "sobeys-downtown"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Chicken Thighs Value Pack", "rawPrice": "$2.99/lb", "merchant": "No Frills", "storeIds": ["nofrills-etobicoke", "walmart-northyork"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Lean Ground Beef", "rawPrice": "$4.49/lb", "merchant": "Metro", "storeIds": ["metro-etobicoke", "nofrills-etobicoke", "loblaws-queensway", "sobeys-downtown", "walmart-northyork"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Large Eggs", "rawPrice": "$3.49", "size": "600 g", "merchant": "Metro", "storeIds": ["metro-etobicoke", "nofrills-etobicoke", "loblaws-queensway", "sobeys-downtown", "walmart-northyork"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Salted Butter", "rawPrice": "$4.99", "size": "454 g", "merchant": "Metro", "storeIds": ["metro-etobicoke", "nofrills-etobicoke", "loblaws-queensway", "sobeys-downtown", "walmart-northyork"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Margarine", "rawPrice": "$2.99", "size": "454 g", "merchant": "No Frills", "storeIds": ["nofrills-etobicoke", "walmart-northyork"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Whipping Cream 35%", "rawPrice": "$3.99", "size": "473 ml", "merchant": "Metro", "storeIds": ["metro-etobicoke", "loblaws-queensway", "sobeys-downtown"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Heavy Cream", "rawPrice": "$4.49", "size": "500 ml", "merchant": "No Frills", "storeIds": ["nofrills-etobicoke"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Parmesan Cheese", "rawPrice": "$6.99", "size": "250 g", "merchant": "Metro", "storeIds": ["metro-etobicoke", "loblaws-queensway", "sobeys-downtown"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Cheddar Cheese", "rawPrice": "$7.99", "size": "450 g", "merchant": "Metro", "storeIds": ["metro-etobicoke", "nofrills-etobicoke", "loblaws-queensway", "sobeys-downtown", "walmart-northyork"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Mozzarella Cheese", "rawPrice": "$5.49", "size": "340 g", "merchant": "Metro", "storeIds": ["metro-etobicoke", "loblaws-queensway", "sobeys-downtown"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "2% Milk", "rawPrice": "$4.29", "size": "4 l", "merchant": "Metro", "storeIds": ["metro-etobicoke", "nofrills-etobicoke", "loblaws-queensway", "sobeys-downtown", "walmart-northyork"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Cooking Onions", "rawPrice": "$2.99", "size": "1.36 kg", "merchant": "Metro", "storeIds": ["metro-etobicoke", "nofrills-etobicoke", "loblaws-queensway", "sobeys-downtown", "walmart-northyork"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Garlic", "rawPrice": "$0.79 ea", "size": "100 g", "merchant": "Metro", "storeIds": ["metro-etobicoke", "nofrills-etobicoke", "loblaws-queensway", "sobeys-downtown"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Fresh Ginger", "rawPrice": "$0.99/lb", "merchant": "Metro", "storeIds": ["metro-etobicoke", "loblaws-queensway", "sobeys-downtown"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Roma Tomatoes", "rawPrice": "$1.49/lb", "merchant": "Metro", "storeIds": ["metro-etobicoke", "nofrills-etobicoke", "loblaws-queensway", "sobeys-downtown", "walmart-northyork"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Crushed Tomatoes", "rawPrice": "$1.29", "size": "796 ml", "merchant": "Metro", "storeIds": ["metro-etobicoke", "nofrills-etobicoke", "loblaws-queensway", "sobeys-downtown", "walmart-northyork"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Carrots", "rawPrice": "$1.99", "size": "2 lb", "merchant": "Metro", "storeIds": ["metro-etobicoke", "nofrills-etobicoke", "loblaws-queensway", "sobeys-downtown", "walmart-northyork"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Celery", "rawPrice": "$2.49 ea", "size": "500 g", "merchant": "Metro", "storeIds": ["metro-etobicoke", "loblaws-queensway"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Broccoli Crowns", "rawPrice": "$1.99/lb", "merchant": "Metro", "storeIds": ["metro-etobicoke", "nofrills-etobicoke", "loblaws-queensway", "sobeys-downtown"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Bell Peppers", "rawPrice": "$2.99/lb", "merchant": "Metro", "storeIds": ["metro-etobicoke", "loblaws-queensway", "sobeys-downtown"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Romaine Lettuce", "rawPrice": "$2.49 ea", "size": "400 g", "merchant": "Metro", "storeIds": ["metro-etobicoke", "loblaws-queensway", "sobeys-downtown"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Iceberg Lettuce", "rawPrice": "$1.99 ea", "size": "500 g", "merchant": "No Frills", "storeIds": ["nofrills-etobicoke", "walmart-northyork"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Avocados", "rawPrice": "2/$5", "size": "340 g", "merchant": "Metro", "storeIds": ["metro-etobicoke", "loblaws-queensway", "sobeys-downtown"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Limes", "rawPrice": "5/$2", "size": "250 g", "merchant": "Metro", "storeIds": ["metro-etobicoke", "loblaws-queensway", "sobeys-downtown"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Lemons", "rawPrice": "3/$2", "size": "300 g", "merchant": "Metro", "storeIds": ["metro-etobicoke", "loblaws-queensway", "sobeys-downtown"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Fresh Basil", "rawPrice": "$2.49", "size": "30 g", "merchant": "Metro", "storeIds": ["metro-etobicoke", "loblaws-queensway"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Cilantro", "rawPrice": "$0.99 ea", "size": "60 g", "merchant": "Metro", "storeIds": ["metro-etobicoke", "loblaws-queensway", "sobeys-downtown"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Basmati Rice", "rawPrice": "$9.99", "size": "4 kg", "merchant": "Metro", "storeIds": ["metro-etobicoke", "nofrills-etobicoke", "loblaws-queensway", "sobeys-downtown", "walmart-northyork"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Spaghetti", "rawPrice": "$1.49", "size": "900 g", "merchant": "Metro", "storeIds": ["metro-etobicoke", "nofrills-etobicoke", "loblaws-queensway", "sobeys-downtown", "walmart-northyork"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "All Purpose Flour", "rawPrice": "$4.99", "size": "2.5 kg", "merchant": "Metro", "storeIds": ["metro-etobicoke", "nofrills-etobicoke", "loblaws-queensway", "sobeys-downtown", "walmart-northyork"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Granulated Sugar", "rawPrice": "$3.49", "size": "2 kg", "merchant": "Metro", "storeIds": ["metro-etobicoke", "nofrills-etobicoke", "loblaws-queensway", "sobeys-downtown", "walmart-northyork"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Soy Sauce", "rawPrice": "$3.99", "size": "500 ml", "merchant": "Metro", "storeIds": ["metro-etobicoke", "loblaws-queensway", "sobeys-downtown"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Salsa", "rawPrice": "$3.49", "size": "650 ml", "merchant": "Metro", "storeIds": ["metro-etobicoke", "nofrills-etobicoke", "loblaws-queensway", "sobeys-downtown"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Flour Tortillas", "rawPrice": "$2.99", "size": "640 g", "merchant": "Metro", "storeIds": ["metro-etobicoke", "nofrills-etobicoke", "loblaws-queensway", "sobeys-downtown", "walmart-northyork"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "White Bread", "rawPrice": "$2.49", "size": "675 g", "merchant": "Metro", "storeIds": ["metro-etobicoke", "nofrills-etobicoke", "loblaws-queensway", "sobeys-downtown", "walmart-northyork"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Garam Masala", "rawPrice": "$4.49", "size": "100 g", "merchant": "Metro", "storeIds": ["metro-etobicoke", "loblaws-queensway"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Curry Powder", "rawPrice": "$3.99", "size": "120 g", "merchant": "Metro", "storeIds": ["metro-etobicoke", "loblaws-queensway", "sobeys-downtown"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Extra Virgin Olive Oil", "rawPrice": "$7.99", "size": "1 l", "merchant": "Metro", "storeIds": ["metro-etobicoke", "loblaws-queensway"], "validFrom": "2026-05-28", "validTo": "2026-06-10" }
+  ]
+}
