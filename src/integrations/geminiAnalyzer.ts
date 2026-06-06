@@ -102,7 +102,7 @@ const RESPONSE_SCHEMA = {
   },
 };
 
-/** Batched response: ingredientIndex into the recipe, itemIndex into the candidate universe. */
+/** Batched response: ingredientIndex into the recipe, candidateIndex into the numbered prompt list. */
 const BATCH_RESPONSE_SCHEMA = {
   type: 'object',
   properties: {
@@ -112,11 +112,11 @@ const BATCH_RESPONSE_SCHEMA = {
         type: 'object',
         properties: {
           ingredientIndex: { type: 'integer' },
-          itemIndex: { type: 'integer' },
+          candidateIndex: { type: 'integer' },
           unitPriceDollars: { type: 'number' },
           quantityGrams: { type: 'number' },
         },
-        required: ['ingredientIndex', 'itemIndex', 'unitPriceDollars', 'quantityGrams'],
+        required: ['ingredientIndex', 'candidateIndex', 'unitPriceDollars', 'quantityGrams'],
       },
     },
   },
@@ -136,7 +136,8 @@ interface AcceptResult {
 }
 interface BatchAccepted {
   ingredientIndex: number;
-  itemIndex: number;
+  /** Position in the numbered candidate list of the prompt (NOT the global items[] index). */
+  candidateIndex: number;
   unitPriceDollars: number;
   quantityGrams: number;
 }
@@ -251,7 +252,7 @@ export class GeminiAnalyzer {
     // assignments to an ingredient the item was actually a candidate for.
     const out: Assignment[] = [];
     for (const a of parsed.accepted ?? []) {
-      const cand = plan.candidates[a.itemIndex];
+      const cand = plan.candidates[a.candidateIndex];
       if (!cand) continue;
       if (!cand.ingredientIndices.includes(a.ingredientIndex)) continue;
       const ingredient = recipe.ingredients[a.ingredientIndex];
@@ -382,7 +383,6 @@ export class GeminiAnalyzer {
     let assignments: Assignment[];
     try {
       const llm = await this.acceptBatch(recipe, reduced, enriched);
-      this.writeCache(recipe, reduced, enriched, llm);
 
       const combined = [...cached, ...llm];
       const ingredientIndex = new Map(recipe.ingredients.map((ing, i) => [ing.name, i]));
@@ -394,7 +394,14 @@ export class GeminiAnalyzer {
         }
       }
       const coverage = coverageOf(matched, plan.ingredientHasCandidates);
-      assignments = belowFloor(coverage) ? await this.fallbackPerIngredient(recipe, enriched) : combined;
+      if (belowFloor(coverage)) {
+        assignments = await this.fallbackPerIngredient(recipe, enriched);
+      } else {
+        // Only persist decisions from a batch call we trust (coverage >= floor);
+        // caching a misfired batch's rejects would replay them on every request.
+        this.writeCache(recipe, reduced, enriched, llm);
+        assignments = combined;
+      }
     } catch {
       assignments = await this.fallbackPerIngredient(recipe, enriched);
     }
