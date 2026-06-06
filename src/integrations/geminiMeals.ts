@@ -47,6 +47,7 @@ const RESPONSE_SCHEMA = {
 
 interface GeminiResponse extends WithUsage {
   candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  promptFeedback?: { blockReason?: string };
 }
 interface RawRecipe {
   dish: string;
@@ -110,7 +111,13 @@ export class GeminiMealGenerator {
     }
     const body = (await res.json()) as GeminiResponse;
     recordUsage('meals', body);
+    if (body.promptFeedback?.blockReason) {
+      throw new Error(`Gemini blocked the request: ${body.promptFeedback.blockReason}`);
+    }
     const text = body.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
+    if (!text) {
+      throw new Error('Gemini returned an empty response.');
+    }
     const parsed = JSON.parse(text) as { recipes?: RawRecipe[] };
 
     const out: GeneratedMeal[] = [];

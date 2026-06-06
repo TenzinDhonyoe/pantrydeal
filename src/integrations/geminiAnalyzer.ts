@@ -384,23 +384,36 @@ export class GeminiAnalyzer {
     try {
       const llm = await this.acceptBatch(recipe, reduced, enriched);
 
-      const combined = [...cached, ...llm];
+      // Judge the batch call on ITS OWN slice: the ingredients only it could still
+      // resolve (undecided in the reduced plan, with no cached accept). Combined
+      // coverage would let a warm cache mask a misfired batch, and its wrong REJECTs
+      // would then be cached and replayed until the flyer rotates.
       const ingredientIndex = new Map(recipe.ingredients.map((ing, i) => [ing.name, i]));
-      const matched = new Set<number>();
-      for (const a of combined) {
-        if (a.unitPriceDollars > 0 && a.quantityGrams > 0) {
-          const i = ingredientIndex.get(a.ingredientName);
-          if (i !== undefined) matched.add(i);
+      const matchedBy = (assigned: Assignment[]): Set<number> => {
+        const matched = new Set<number>();
+        for (const a of assigned) {
+          if (a.unitPriceDollars > 0 && a.quantityGrams > 0) {
+            const i = ingredientIndex.get(a.ingredientName);
+            if (i !== undefined) matched.add(i);
+          }
+        }
+        return matched;
+      };
+      const cachedMatched = matchedBy(cached);
+      const llmOnlyHasCandidates = recipe.ingredients.map(() => false);
+      for (const c of reduced.candidates) {
+        for (const ingIdx of c.ingredientIndices) {
+          if (!cachedMatched.has(ingIdx)) llmOnlyHasCandidates[ingIdx] = true;
         }
       }
-      const coverage = coverageOf(matched, plan.ingredientHasCandidates);
+      const coverage = coverageOf(matchedBy(llm), llmOnlyHasCandidates);
       if (belowFloor(coverage)) {
         assignments = await this.fallbackPerIngredient(recipe, enriched);
       } else {
         // Only persist decisions from a batch call we trust (coverage >= floor);
         // caching a misfired batch's rejects would replay them on every request.
         this.writeCache(recipe, reduced, enriched, llm);
-        assignments = combined;
+        assignments = [...cached, ...llm];
       }
     } catch {
       assignments = await this.fallbackPerIngredient(recipe, enriched);
