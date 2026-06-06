@@ -1,0 +1,17 @@
+{
+  "stores": [
+    {
+      "storeId": "corner-mart-etobicoke",
+      "merchant": "Corner Mart",
+      "name": "Corner Mart Etobicoke",
+      "address": "5 Local St, Etobicoke",
+      "lat": 43.62,
+      "lng": -79.5
+    }
+  ],
+  "items": [
+    { "name": "Boneless Skinless Chicken Breast", "rawPrice": "$6.49/lb", "merchant": "Corner Mart", "storeIds": ["corner-mart-etobicoke"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Cooking Onions", "rawPrice": "$3.49", "size": "1.36 kg", "merchant": "Corner Mart", "storeIds": ["corner-mart-etobicoke"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Basmati Rice", "rawPrice": "$11.99", "size": "4 kg", "merchant": "Corner Mart", "storeIds": ["corner-mart-etobicoke"], "validFrom": "2026-05-28", "validTo": "2026-06-10" }
+  ]
+}

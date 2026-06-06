@@ -1,0 +1,18 @@
+{
+  "stores": [
+    {
+      "storeId": "fortinos-hamilton",
+      "merchant": "Fortinos",
+      "name": "Fortinos Hamilton",
+      "address": "65 Mall Rd, Hamilton",
+      "lat": 43.2557,
+      "lng": -79.8711
+    }
+  ],
+  "items": [
+    { "name": "Boneless Skinless Chicken Breast", "rawPrice": "$4.99/lb", "merchant": "Fortinos", "storeIds": ["fortinos-hamilton"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Salted Butter", "rawPrice": "$3.99", "size": "454 g", "merchant": "Fortinos", "storeIds": ["fortinos-hamilton"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Cooking Onions", "rawPrice": "$2.49", "size": "1.36 kg", "merchant": "Fortinos", "storeIds": ["fortinos-hamilton"], "validFrom": "2026-05-28", "validTo": "2026-06-10" },
+    { "name": "Basmati Rice", "rawPrice": "$8.99", "size": "4 kg", "merchant": "Fortinos", "storeIds": ["fortinos-hamilton"], "validFrom": "2026-05-28", "validTo": "2026-06-10" }
+  ]
+}

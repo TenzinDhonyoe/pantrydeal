@@ -1,0 +1,29 @@
+{
+  "comment": "Golden price-normalization cases. expected = pricePerGram in dollars; asserted within +/-2%.",
+  "cases": [
+    { "rawPrice": "$3.49/lb", "expected": 0.00769405 },
+    { "rawPrice": "$8.99 family pack", "size": "1.5 kg", "expected": 0.00599333 },
+    { "rawPrice": "2/$5", "size": "500 g", "expected": 0.005 },
+    { "rawPrice": "$1.29 ea", "size": "200 g", "expected": 0.00645 },
+    { "rawPrice": "$0.99/100g", "expected": 0.0099 },
+    { "rawPrice": "$12.99/kg", "expected": 0.01299 },
+    { "rawPrice": "$4.99", "size": "1 lb", "expected": 0.01100106 },
+    { "rawPrice": "$2.50 each", "size": "250 g", "expected": 0.01 },
+    { "rawPrice": "10/$10", "size": "100 g", "expected": 0.01 },
+    { "rawPrice": "$5.99/lb", "expected": 0.01320569 },
+    { "rawPrice": "$0.49/100 g", "expected": 0.0049 },
+    { "rawPrice": "$6.49 bag", "size": "2 kg", "expected": 0.003245 },
+    { "rawPrice": "$3.99 ea", "size": "454 g", "expected": 0.00878855 },
+    { "rawPrice": "$1.00/lb", "expected": 0.00220463 },
+    { "rawPrice": "3/$6", "size": "300 g", "expected": 0.00666667 },
+    { "rawPrice": "$9.99", "size": "750 g", "expected": 0.01332 },
+    { "rawPrice": "$2.99/kg", "expected": 0.00299 },
+    { "rawPrice": "$0.89 ea", "size": "100 g", "expected": 0.0089 },
+    { "rawPrice": "$15.99 value pack", "size": "1.36 kg", "expected": 0.01175735 },
+    { "rawPrice": "$7.49/lb", "expected": 0.01651263 },
+    { "rawPrice": "$4.49", "size": "500 ml", "expected": 0.00898 },
+    { "rawPrice": "5/$5", "size": "200 g", "expected": 0.005 },
+    { "rawPrice": "$1.99/100g", "expected": 0.0199 },
+    { "rawPrice": "$11.99 family size", "size": "1.8 kg", "expected": 0.00666111 }
+  ]
+}

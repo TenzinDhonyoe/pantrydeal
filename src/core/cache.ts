@@ -1,0 +1,85 @@
+/**
+ * cache — pure, tested caching primitives for the LIVE path (docs/ARCHITECTURE.md
+ * §5 option D). The cache *instances* live in the integration layer (process
+ * memory, lost on restart = safe); this module is just the data structure and the
+ * key/freshness helpers, so the bug-prone parts (LRU eviction, TTL math, key
+ * normalization) are covered by the tested core.
+ *
+ * Two consumers:
+ *   - recipe cache:        key (dinner, people, model) -> Recipe        (no expiry)
+ *   - classification cache: key (ingredient, sku|name, validTo) -> decision
+ *                          guarded by isFresh(validTo) so a rotated flyer's stale
+ *                          price can never be served (it would send you to the
+ *                          wrong "cheapest" store).
+ */
+
+const DAY_MS = 86_400_000;
+
+/**
+ * Build a stable cache key from parts. Strings are trimmed, internal whitespace
+ * collapsed, and lowercased so "Butter Chicken" and "  butter  chicken " collide;
+ * parts are joined with NUL, which cannot appear in the inputs, so distinct part
+ * lists can never alias.
+ */
+export function cacheKey(...parts: Array<string | number>): string {
+  return parts
+    .map((p) => String(p).trim().replace(/\s+/g, ' ').toLowerCase())
+    .join('\u0000');
+}
+
+/**
+ * Is a flyer item's deal still valid at `now`? `validTo` is an inclusive day
+ * (e.g. "2026-12-31"), so the deal is fresh through the end of that day. Missing or
+ * unparseable validTo is treated as STALE — we never serve a cached price we cannot
+ * prove is still in effect.
+ */
+export function isFresh(validTo: string | undefined, now: Date): boolean {
+  if (!validTo) return false;
+  const t = Date.parse(validTo);
+  if (Number.isNaN(t)) return false;
+  return now.getTime() <= t + DAY_MS;
+}
+
+/**
+ * A bounded least-recently-used cache. Reads and writes refresh recency; when the
+ * entry count exceeds `max`, the least-recently-used keys are evicted. Keys are
+ * strings (build them with cacheKey); values are anything.
+ */
+export class LruCache<V> {
+  private readonly map = new Map<string, V>();
+
+  constructor(private readonly max = 500) {
+    if (max < 1) throw new Error('LruCache max must be >= 1');
+  }
+
+  get(key: string): V | undefined {
+    if (!this.map.has(key)) return undefined;
+    const value = this.map.get(key)!;
+    // Refresh recency: delete + re-insert moves it to the newest position.
+    this.map.delete(key);
+    this.map.set(key, value);
+    return value;
+  }
+
+  has(key: string): boolean {
+    return this.map.has(key);
+  }
+
+  set(key: string, value: V): void {
+    if (this.map.has(key)) this.map.delete(key);
+    this.map.set(key, value);
+    while (this.map.size > this.max) {
+      const oldest = this.map.keys().next().value;
+      if (oldest === undefined) break;
+      this.map.delete(oldest);
+    }
+  }
+
+  get size(): number {
+    return this.map.size;
+  }
+
+  clear(): void {
+    this.map.clear();
+  }
+}
