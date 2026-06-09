@@ -323,7 +323,7 @@ async function handleRecipe(req: IncomingMessage, res: ServerResponse): Promise<
     sendJson(res, 200, { ...toResponse(result, postal), health: healthLensDto(result.recipe), source });
   } catch (err) {
     // Map the named parser errors to honest statuses + messages (no silent failures).
-    const e = err as Error;
+    const e = err instanceof Error ? err : new Error(String(err));
     const userFacing = new Set([
       'InvalidUrlError',
       'BlockedHostError',
@@ -334,7 +334,10 @@ async function handleRecipe(req: IncomingMessage, res: ServerResponse): Promise<
       const status = e.name === 'BlockedHostError' ? 400 : 422;
       return sendJson(res, status, { error: e.message, code: e.name });
     }
-    sendJson(res, 500, { error: e.message });
+    // Unmapped failure (e.g. Backflipp/geocoder down): log the real cause
+    // server-side, return a generic message so vendor/internal strings don't leak.
+    process.stderr.write(`[recipe] unhandled error: ${e.stack ?? e.message}\n`);
+    sendJson(res, 500, { error: 'Something went wrong pricing that recipe. Please try again.' });
   }
 }
 

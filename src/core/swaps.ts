@@ -37,25 +37,38 @@ export const LOWER_CARB_SWAPS: Record<string, string> = {
   honey: 'use less, or a non-nutritive sweetener',
 };
 
-// Longest key first so "white rice" matches before the generic "rice".
-const KEYS_BY_LENGTH = Object.keys(LOWER_CARB_SWAPS).sort((a, b) => b.length - a.length);
+/**
+ * Ingredients whose name CONTAINS a swap key as a word but should never trigger
+ * it: a sweet potato is already the recommended swap (not a white potato), and
+ * sugar-snap / snap peas are a green vegetable, not the sweetener "sugar".
+ * Substring matching alone produced false advice like "swap your sweet potato for
+ * a sweet potato" or "use less sugar" on sugar snap peas.
+ */
+const NEVER_SWAP = [/\bsweet potato/, /\bsugar snap/, /\bsnap pea/];
+
+/** Match a key only as a whole word, so "bread" misses "shortbread"/"gingerbread". */
+function matchesKey(name: string, key: string): boolean {
+  return new RegExp(`(^|[^a-z])${key}([^a-z]|$)`, 'i').test(name);
+}
 
 /**
  * Suggest lower-carb swaps for any recipe ingredient that matches the curated
- * map. At most one suggestion per ingredient, and each distinct suggestion is
- * shown once even if several ingredients map to it.
+ * map. Word-boundary matching (not substring) avoids false hits like
+ * "flourless"→flour. At most one suggestion per ingredient, longest key wins
+ * ("white rice" over "rice"), and each distinct suggestion is shown once.
  */
 export function lowerCarbSwaps(
   ingredients: ReadonlyArray<{ name: string }>,
   table: Record<string, string> = LOWER_CARB_SWAPS,
-  keysByLength: string[] = KEYS_BY_LENGTH,
 ): CarbSwap[] {
-  const keys = table === LOWER_CARB_SWAPS ? keysByLength : Object.keys(table).sort((a, b) => b.length - a.length);
+  // Longest key first so "white rice" matches before the generic "rice".
+  const keys = Object.keys(table).sort((a, b) => b.length - a.length);
   const out: CarbSwap[] = [];
   const seen = new Set<string>();
   for (const ing of ingredients) {
     const n = ing.name.toLowerCase();
-    const key = keys.find((k) => n.includes(k));
+    if (NEVER_SWAP.some((re) => re.test(n))) continue;
+    const key = keys.find((k) => matchesKey(n, k));
     if (!key) continue;
     const suggestion = table[key]!;
     if (seen.has(suggestion)) continue;

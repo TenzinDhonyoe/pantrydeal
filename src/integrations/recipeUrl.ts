@@ -105,53 +105,71 @@ async function assertPublicUrl(raw: string): Promise<URL> {
   return url;
 }
 
-/** Fetch a public page, re-validating every redirect hop and capping the body. */
+/**
+ * Fetch a public page, re-validating every redirect hop and capping the body.
+ *
+ * SSRF posture: assertPublicUrl() resolves the host and rejects private /
+ * loopback / link-local / metadata targets before each hop, redirects are manual
+ * (never auto-followed to an unvetted host), no credentials are sent, and the
+ * body is time- and size-bounded. Residual limitation: a determined active
+ * DNS-rebinding attacker (sub-second TTL flip between this lookup and the
+ * kernel's connect resolution) could still slip through — fully closing that
+ * needs connect-time IP pinning via a custom undici dispatcher, deferred to keep
+ * undici out of the dependency set. Acceptable for this app's threat model.
+ */
 async function fetchPage(rawUrl: string, fetchImpl: typeof fetch): Promise<string> {
   let current = rawUrl;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const url = await assertPublicUrl(current); // re-validate each hop (redirect SSRF defense)
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    let res: Response;
     try {
-      res = await fetchImpl(url, {
-        method: 'GET',
-        redirect: 'manual',
-        signal: controller.signal,
-        headers: { accept: 'text/html', 'user-agent': 'PantryDeal/1.0 (+recipe importer)' },
-      });
-    } catch {
-      throw new FetchFailedError('We couldn’t reach that site.');
+      let res: Response;
+      try {
+        res = await fetchImpl(url, {
+          method: 'GET',
+          redirect: 'manual',
+          signal: controller.signal,
+          headers: { accept: 'text/html', 'user-agent': 'PantryDeal/1.0 (+recipe importer)' },
+        });
+      } catch {
+        throw new FetchFailedError('We couldn’t reach that site.');
+      }
+
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers.get('location');
+        if (!loc) throw new FetchFailedError('We couldn’t read that page.');
+        current = new URL(loc, url).toString();
+        continue; // finally clears this hop's timer
+      }
+      if (!res.ok) throw new FetchFailedError(`We couldn’t read that page (${res.status}).`);
+
+      // Read with a hard byte cap so a huge page can't exhaust memory. The timer
+      // stays armed through the read, so a slow-drip body aborts at the deadline.
+      const reader = res.body?.getReader();
+      if (!reader) return (await res.text()).slice(0, MAX_BODY_BYTES);
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) {
+            total += value.length;
+            if (total > MAX_BODY_BYTES) {
+              await reader.cancel();
+              break;
+            }
+            chunks.push(value);
+          }
+        }
+      } catch {
+        throw new FetchFailedError('That page took too long to read.');
+      }
+      return Buffer.concat(chunks.map((c) => Buffer.from(c))).toString('utf8');
     } finally {
       clearTimeout(timer);
     }
-
-    if (res.status >= 300 && res.status < 400) {
-      const loc = res.headers.get('location');
-      if (!loc) throw new FetchFailedError('We couldn’t read that page.');
-      current = new URL(loc, url).toString();
-      continue;
-    }
-    if (!res.ok) throw new FetchFailedError(`We couldn’t read that page (${res.status}).`);
-
-    // Read with a hard byte cap so a huge page can't exhaust memory.
-    const reader = res.body?.getReader();
-    if (!reader) return (await res.text()).slice(0, MAX_BODY_BYTES);
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) {
-        total += value.length;
-        if (total > MAX_BODY_BYTES) {
-          await reader.cancel();
-          break;
-        }
-        chunks.push(value);
-      }
-    }
-    return Buffer.concat(chunks.map((c) => Buffer.from(c))).toString('utf8');
   }
   throw new FetchFailedError('That link redirected too many times.');
 }
@@ -324,15 +342,21 @@ export class RecipeUrlParser {
     const ask = servings
       ? `${content}\n\nScale every ingredient quantity for exactly ${servings} servings.`
       : content;
-    const res = await this.fetchImpl(`${BASE_URL}/${this.model}:generateContent`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-goog-api-key': this.apiKey },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: EXTRACT_SYSTEM }] },
-        contents: [{ role: 'user', parts: [{ text: ask }] }],
-        generationConfig: { responseMimeType: 'application/json', responseSchema: RESPONSE_SCHEMA, temperature: 0 },
-      }),
-    });
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`${BASE_URL}/${this.model}:generateContent`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': this.apiKey },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: EXTRACT_SYSTEM }] },
+          contents: [{ role: 'user', parts: [{ text: ask }] }],
+          generationConfig: { responseMimeType: 'application/json', responseSchema: RESPONSE_SCHEMA, temperature: 0 },
+        }),
+      });
+    } catch {
+      // Network error reaching Gemini — recoverable, point the user at paste.
+      throw new FetchFailedError('We couldn’t reach the recipe reader. Try again, or paste the ingredients.');
+    }
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
       throw new FetchFailedError(`Recipe extraction failed (${res.status}). ${detail.slice(0, 200)}`);
@@ -345,7 +369,13 @@ export class RecipeUrlParser {
     const out = body.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
     if (!out) throw new NoRecipeFoundError('We couldn’t find a recipe there. Try pasting the ingredients.');
 
-    const recipe = JSON.parse(out) as Recipe;
+    let recipe: Recipe;
+    try {
+      recipe = JSON.parse(out) as Recipe;
+    } catch {
+      // Gemini returned non-JSON (e.g. truncated output) — recoverable.
+      throw new NoRecipeFoundError('We couldn’t read that recipe. Try pasting the ingredients.');
+    }
     recipe.ingredients = (recipe.ingredients ?? []).map((i) => ({
       name: String(i.name ?? '').trim().toLowerCase(), // canonical table key
       qtyGrams: Number(i.qtyGrams) || 0,
@@ -357,7 +387,10 @@ export class RecipeUrlParser {
       throw new NoRecipeFoundError('We couldn’t find a recipe there. Try pasting the ingredients.');
     }
     recipe.dish = (recipe.dish || fallbackName || 'Your recipe').trim();
-    recipe.servings = Number(recipe.servings) > 0 ? Number(recipe.servings) : servings ?? 4;
+    // When we asked Gemini to scale grams to `servings`, the per-serving divisor
+    // MUST be that same number — Gemini often reports the recipe's natural yield
+    // in its `servings` field, which would make the health lens off by a factor.
+    recipe.servings = servings && servings > 0 ? servings : Number(recipe.servings) > 0 ? Number(recipe.servings) : 4;
     return recipe;
   }
 }

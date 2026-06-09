@@ -36,4 +36,24 @@ describe('lowerCarbSwaps', () => {
   it('is case-insensitive', () => {
     expect(lowerCarbSwaps([{ name: 'White Bread' }])).toHaveLength(1);
   });
+
+  it('does not fire on words that merely contain a key (word-boundary match)', () => {
+    // "shortbread"/"gingerbread" contain "bread"; "flourless" contains "flour"
+    expect(lowerCarbSwaps([{ name: 'shortbread cookies' }])).toEqual([]);
+    expect(lowerCarbSwaps([{ name: 'gingerbread' }])).toEqual([]);
+    expect(lowerCarbSwaps([{ name: 'flourless chocolate cake' }])).toEqual([]);
+  });
+
+  it('never suggests swapping a sweet potato or sugar snap peas', () => {
+    expect(lowerCarbSwaps([{ name: 'sweet potato' }])).toEqual([]);
+    expect(lowerCarbSwaps([{ name: 'sweet potato fries' }])).toEqual([]);
+    expect(lowerCarbSwaps([{ name: 'sugar snap peas' }])).toEqual([]);
+    expect(lowerCarbSwaps([{ name: 'snap peas' }])).toEqual([]);
+  });
+
+  it('still fires for a real white potato', () => {
+    const out = lowerCarbSwaps([{ name: 'russet potato' }]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.suggestion).toMatch(/sweet potato|cauliflower/);
+  });
 });
