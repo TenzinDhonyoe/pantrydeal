@@ -49,18 +49,6 @@ html { -webkit-text-size-adjust: 100%; }
 }
 .draft-banner strong { color: #6a4d0d; }
 
-.nutri {
-  display: inline-block;
-  margin-left: 8px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: var(--brand-ink);
-  background: var(--brand-soft);
-  border-radius: 999px;
-  padding: 2px 9px;
-  vertical-align: middle;
-  white-space: nowrap;
-}
 .swap-btn {
   font: inherit;
   font-size: 0.78rem;
