@@ -42,6 +42,11 @@ export interface SearchRequest {
   radiusKm?: number;
   /** Override the flyer fixture path (offline mode only). */
   fixturePath?: string;
+  /**
+   * A pre-parsed recipe to price directly, skipping recipe parsing (live mode
+   * only). Used by the Recipe-from-URL view, which parses the recipe itself.
+   */
+  recipe?: Recipe;
 }
 
 /** The default offline flyer fixtures shipped with the repo. */
@@ -108,6 +113,7 @@ async function buildLiveDeps(
   dinner: string,
   postal: string,
   servings: number | undefined,
+  prebuilt?: Recipe,
 ): Promise<ResolvedDeps> {
   const [
     { ZippopotamGeocoder },
@@ -120,7 +126,9 @@ async function buildLiveDeps(
   ]);
 
   const geocoder = new ZippopotamGeocoder();
-  const recipe = await parseRecipeLive(dinner, servings); // C + D: book/cache first, Gemini on miss
+  // A caller (the Recipe-from-URL view) may hand us an already-parsed recipe;
+  // otherwise parse it (C + D: book/cache first, Gemini on miss).
+  const recipe = prebuilt ?? (await parseRecipeLive(dinner, servings));
   const recipeParser: RecipeParser = { parse: () => Promise.resolve(recipe) };
 
   const terms = [...new Set(recipe.ingredients.flatMap((i) => [i.name, ...i.substitutes]))];
@@ -139,7 +147,7 @@ async function buildLiveDeps(
 /** Run a full PantryDeal search, choosing live or fixture dependencies. */
 export async function search(req: SearchRequest): Promise<PipelineResult> {
   const { deps, matcher } = req.live
-    ? await buildLiveDeps(req.dinner, req.postal, req.people)
+    ? await buildLiveDeps(req.dinner, req.postal, req.people, req.recipe)
     : buildFixtureDeps(req.fixturePath);
 
   return runPipeline(deps, {
@@ -149,6 +157,44 @@ export async function search(req: SearchRequest): Promise<PipelineResult> {
     radiusKm: req.radiusKm,
     matcher,
   });
+}
+
+export interface RecipeSourceRequest {
+  postal: string;
+  url?: string;
+  text?: string;
+  people?: number;
+  radiusKm?: number;
+}
+
+export interface RecipeSourceResult {
+  result: PipelineResult;
+  /** Which parse path produced the recipe (json-ld | gemini-text | paste). */
+  source: 'json-ld' | 'gemini-text' | 'paste';
+}
+
+/**
+ * Recipe-from-URL view (CEO plan 2026-06-09): parse a recipe from a URL or pasted
+ * text, then price it through the same live pipeline as everything else. Always
+ * live — it needs Gemini to extract the recipe and Backflipp for real deals.
+ */
+export async function priceRecipeFromSource(req: RecipeSourceRequest): Promise<RecipeSourceResult> {
+  const { RecipeUrlParser } = await import('./integrations/recipeUrl.js');
+  const { recipe, source } = await new RecipeUrlParser().parse({
+    url: req.url,
+    text: req.text,
+    servings: req.people,
+  });
+  // Inject the parsed recipe straight into the live pipeline (skips re-parsing).
+  const result = await search({
+    postal: req.postal,
+    dinner: recipe.dish,
+    people: req.people,
+    live: true,
+    radiusKm: req.radiusKm,
+    recipe,
+  });
+  return { result, source };
 }
 
 // ---------------------------------------------------------------------------

@@ -18,10 +18,21 @@ import {
   optimizePlan,
   planPurchase,
   computeRecipeNutrition,
+  nutritionForMatched,
+  lowerCarbSwaps,
+  validateRecipe,
   type PipelineResult,
   type PlanItem,
+  type Recipe,
 } from './core/index.js';
-import { search, liveAvailable, planPrediabetesWeek, type MealPricing, type WeekResult } from './runner.js';
+import {
+  search,
+  liveAvailable,
+  planPrediabetesWeek,
+  priceRecipeFromSource,
+  type MealPricing,
+  type WeekResult,
+} from './runner.js';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const WEB_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
@@ -113,6 +124,8 @@ function toResponse(result: PipelineResult, postal: string) {
       trips: plan.trips.map((t) => ({
         store: t.store.name,
         merchant: t.store.merchant,
+        address: t.store.address,
+        distanceKm: t.store.distanceKm,
         realSubtotal: t.realSubtotal,
         items: t.items.map(itemDto),
       })),
@@ -120,6 +133,46 @@ function toResponse(result: PipelineResult, postal: string) {
       onSaleElsewhere: plan.onSaleElsewhere.map((name) => ({ ingredient: name, ...(elsewhereFor(name) ?? {}) })),
       neverOnSale: plan.neverOnSale,
     },
+  };
+}
+
+/**
+ * The prediabetes "blood-sugar lens" for an imported recipe (CEO plan 2026-06-09).
+ * Per-serving carbs/fiber/protein over the ingredients we can match to the table
+ * (most web recipes contain un-tabled items, so this is an honest partial estimate),
+ * a gentle plain-language read, lower-carb swaps, and — only when every ingredient
+ * is known — the prediabetes pass/amber verdict. Null when nothing matched.
+ */
+function healthLensDto(recipe: Recipe) {
+  // Per-serving math uses the recipe's own yield, not the shopper headcount.
+  const partial = nutritionForMatched(recipe.ingredients, recipe.servings);
+  if (!partial) return null;
+  const { nutrition, matched, total, missing } = partial;
+  const carbsG = Math.round(nutrition.carbsG);
+  const fiberG = Math.round(nutrition.fiberG);
+  const proteinG = Math.round(nutrition.proteinG);
+
+  // Gentle, non-judgmental read keyed off the carb load (DRAFT targets, D15).
+  const read =
+    carbsG > 60
+      ? 'Higher-carb — a smaller starch portion or extra non-starchy veg eases the spike.'
+      : carbsG > 30
+        ? 'Moderate carbs — pairing with protein and fiber helps keep blood sugar steady.'
+        : 'Lower-carb — a gentle choice for steady blood sugar.';
+
+  // Full prediabetes verdict only when we have data for every ingredient.
+  const fullCoverage = missing.length === 0;
+  const verdict = fullCoverage ? validateRecipe(recipe) : null;
+
+  return {
+    perServing: { carbsG, fiberG, proteinG },
+    matched,
+    total,
+    coverageNote:
+      missing.length > 0 ? `Estimate based on ${matched} of ${total} ingredients we could match.` : null,
+    read,
+    swaps: lowerCarbSwaps(recipe.ingredients),
+    verdict: verdict ? { fits: verdict.ok, notes: verdict.violations } : null,
   };
 }
 
@@ -239,6 +292,55 @@ async function handleSearch(req: IncomingMessage, res: ServerResponse): Promise<
   }
 }
 
+async function handleRecipe(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: { postal?: string; url?: string; text?: string; people?: number };
+  try {
+    body = JSON.parse((await readBody(req)) || '{}');
+  } catch {
+    return sendJson(res, 400, { error: 'Invalid JSON body.' });
+  }
+
+  const postal = (body.postal ?? '').trim();
+  const url = (body.url ?? '').trim();
+  const text = (body.text ?? '').trim();
+  if (!postal) return sendJson(res, 400, { error: 'A postal code is required.' });
+  if (!url && !text) {
+    return sendJson(res, 400, { error: 'Enter a recipe URL or paste the ingredients.' });
+  }
+  // The Recipe view is inherently live: it needs Gemini to read the recipe.
+  if (!liveAvailable()) {
+    return sendJson(res, 400, {
+      error: 'Recipe import needs GEMINI_API_KEY set on the server.',
+    });
+  }
+  const people = body.people != null ? Number(body.people) : undefined;
+  if (people !== undefined && (!Number.isFinite(people) || people <= 0)) {
+    return sendJson(res, 400, { error: 'People must be a positive number.' });
+  }
+
+  try {
+    const { result, source } = await priceRecipeFromSource({ postal, url, text, people });
+    sendJson(res, 200, { ...toResponse(result, postal), health: healthLensDto(result.recipe), source });
+  } catch (err) {
+    // Map the named parser errors to honest statuses + messages (no silent failures).
+    const e = err instanceof Error ? err : new Error(String(err));
+    const userFacing = new Set([
+      'InvalidUrlError',
+      'BlockedHostError',
+      'FetchFailedError',
+      'NoRecipeFoundError',
+    ]);
+    if (userFacing.has(e.name)) {
+      const status = e.name === 'BlockedHostError' ? 400 : 422;
+      return sendJson(res, status, { error: e.message, code: e.name });
+    }
+    // Unmapped failure (e.g. Backflipp/geocoder down): log the real cause
+    // server-side, return a generic message so vendor/internal strings don't leak.
+    process.stderr.write(`[recipe] unhandled error: ${e.stack ?? e.message}\n`);
+    sendJson(res, 500, { error: 'Something went wrong pricing that recipe. Please try again.' });
+  }
+}
+
 async function serveStatic(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const urlPath = (req.url ?? '/').split('?')[0]!;
   const rel = urlPath === '/' ? 'index.html' : normalize(urlPath).replace(/^(\.\.[/\\])+/, '').replace(/^[/\\]+/, '');
@@ -264,6 +366,10 @@ const server = createServer((req, res) => {
   }
   if (req.method === 'POST' && url === '/api/plan-week') {
     void handlePlanWeek(req, res);
+    return;
+  }
+  if (req.method === 'POST' && url === '/api/recipe') {
+    void handleRecipe(req, res);
     return;
   }
   if (req.method === 'GET' && url === '/api/config') {

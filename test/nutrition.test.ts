@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   computeRecipeNutrition,
+  nutritionForMatched,
   validateMeal,
   validateRecipe,
   isBlocked,
@@ -18,6 +19,44 @@ function recipe(ings: Array<{ name: string; qtyGrams: number }>, servings = 4): 
     ingredients: ings.map((i) => ({ ...i, category: 'other', substitutes: [] })),
   };
 }
+
+describe('nutritionForMatched', () => {
+  it('returns null when no ingredient is in the table', () => {
+    expect(nutritionForMatched([{ name: 'unicorn meat', qtyGrams: 100 }], 4)).toBeNull();
+  });
+
+  it('computes over matched ingredients only and reports coverage', () => {
+    // chicken is in the table; "exotic spice blend" is not — estimate uses the 1 match.
+    const r = nutritionForMatched(
+      [
+        { name: 'chicken', qtyGrams: 400 },
+        { name: 'exotic spice blend', qtyGrams: 20 },
+      ],
+      4,
+    );
+    expect(r).not.toBeNull();
+    expect(r!.matched).toBe(1);
+    expect(r!.total).toBe(2);
+    expect(r!.missing).toEqual(['exotic spice blend']);
+    expect(r!.nutrition.proteinG).toBeCloseTo(31, 5); // same as the all-matched chicken case
+  });
+
+  it('matches computeRecipeNutrition when every ingredient is known', () => {
+    const ings = [
+      { name: 'chicken', qtyGrams: 400 },
+      { name: 'black beans', qtyGrams: 200 },
+    ];
+    const partial = nutritionForMatched(ings, 4);
+    const full = computeRecipeNutrition(ings, 4);
+    expect(partial).not.toBeNull();
+    expect(full.ok).toBe(true);
+    if (full.ok) {
+      expect(partial!.missing).toEqual([]);
+      expect(partial!.matched).toBe(2);
+      expect(partial!.nutrition.carbsG).toBeCloseTo(full.nutrition.carbsG, 5);
+    }
+  });
+});
 
 describe('computeRecipeNutrition', () => {
   it('sums macros from the table and divides by servings', () => {

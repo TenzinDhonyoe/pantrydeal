@@ -98,6 +98,37 @@ export function computeRecipeNutrition(
   return { ok: true, nutrition: { carbsG: carbsG / d, fiberG: fiberG / d, addedSugarG: addedSugarG / d, proteinG: proteinG / d } };
 }
 
+/** Per-serving macros over only the table-matched ingredients, plus coverage. */
+export interface PartialNutrition {
+  nutrition: RecipeNutrition;
+  /** How many of the recipe's ingredients we had table data for. */
+  matched: number;
+  total: number;
+  /** Ingredient names with no table data (excluded from the estimate). */
+  missing: string[];
+}
+
+/**
+ * Like computeRecipeNutrition, but tolerant of un-tabled ingredients: it sums
+ * ONLY the ingredients we have data for and reports how many that covers. An
+ * arbitrary web recipe almost always contains items outside our small table, so
+ * the all-or-nothing computeRecipeNutrition would return nothing; this gives an
+ * honest "based on N of M ingredients" estimate instead. Returns null when not a
+ * single ingredient matched (the caller hides the lens rather than show "0 g").
+ */
+export function nutritionForMatched(
+  ingredients: ReadonlyArray<{ name: string; qtyGrams: number }>,
+  servings: number,
+  table: Record<string, IngredientNutrition> = NUTRITION_TABLE,
+): PartialNutrition | null {
+  const matched = ingredients.filter((i) => lookup(i.name, table));
+  if (matched.length === 0) return null;
+  const computed = computeRecipeNutrition(matched, servings, table);
+  if (!computed.ok) return null; // unreachable: every `matched` item is in the table
+  const missing = ingredients.filter((i) => !lookup(i.name, table)).map((i) => i.name);
+  return { nutrition: computed.nutrition, matched: matched.length, total: ingredients.length, missing };
+}
+
 /** Is this ingredient name on the high-glycemic / added-sugar blocklist? */
 export function isBlocked(name: string, blocklist: string[] = HIGH_GI_BLOCKLIST): boolean {
   const n = name.toLowerCase();
