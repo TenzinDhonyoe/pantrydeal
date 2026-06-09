@@ -7,6 +7,24 @@
     String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const perKg = (ppg) => money(ppg * 1000) + "/kg";
   const hasUnit = (raw) => /\/\s*\d*\s*(lb|kg|g|oz|ml|l)\b/i.test(raw || "");
+  const km = (d) => (d || d === 0 ? Number(d).toFixed(1) + " km" : "");
+  const mapsUrl = (store, address) =>
+    "https://www.google.com/maps/search/?api=1&query=" +
+    encodeURIComponent([store, address].filter(Boolean).join(" "));
+  const initials = (name) =>
+    String(name || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+
+  // A collapsible FAQ-style section. `open` controls the initial state.
+  function section(title, meta, bodyHtml, open) {
+    return (
+      '<details class="panel"' + (open ? " open" : "") + ">" +
+      '<summary class="panel__head"><span class="panel__title">' + esc(title) + "</span>" +
+      (meta ? '<span class="panel__meta">' + meta + "</span>" : "") +
+      '<svg class="panel__chev" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+      "</summary>" +
+      '<div class="panel__body">' + bodyHtml + "</div></details>"
+    );
+  }
 
   let liveAvailable = false;
   fetch("/api/config")
@@ -31,12 +49,19 @@
   }
 
   function itemRow(it) {
-    const tag = (it.goodDeal ? "🔥 " : "") + perKg(it.pricePerGram);
+    const flame = it.goodDeal ? "🔥 " : "";
+    // A per-kg price only makes sense when you buy by weight. For a packaged
+    // good you buy WHOLE units — you can't buy 0.8 of a can — so show the pack
+    // price you actually pay and how many packs the week needs.
+    const pack = it.basis === "pack" && it.packGrams;
+    const tag = flame + (pack ? money(it.packPrice) + " / " + it.packGrams + " g" : perKg(it.pricePerGram));
     const shelf = hasUnit(it.rawPrice) ? " · " + esc(it.rawPrice) : "";
-    const detail =
-      it.basis === "weight"
-        ? it.neededGrams + " g"
-        : it.unitsNeeded + "× " + it.packGrams + " g" + (it.leftoverGrams > 0 ? " · " + it.leftoverGrams + " g left" : "");
+    const packWord = it.packGrams >= 1000 ? "bag" : "pack";
+    const detail = pack
+      ? (it.unitsNeeded > 1 ? '<b class="buy-n">buy ' + it.unitsNeeded + " " + packWord + "s</b>" : "1 " + packWord) +
+        " · need " + it.neededGrams + " g" +
+        (it.leftoverGrams > 0 ? " · " + it.leftoverGrams + " g left" : "")
+      : it.neededGrams + " g";
     return (
       '<div class="ing-row is-deal"><div class="ing-row__name">' + esc(it.ingredient) + "</div>" +
       '<div class="ing-row__deal"><span class="deal-tag">' + esc(tag) + '</span>' +
@@ -45,34 +70,74 @@
     );
   }
 
-  function menuCard(meals) {
+  function menuSection(meals) {
+    const macro = (val, label) =>
+      '<span class="macro"><b>' + val + "</b> " + label + "</span>";
     const rows = meals
-      .map((m) => {
+      .map((m, i) => {
         const nutri = m.nutrition
-          ? '<span class="nutri">' + m.nutrition.carbsG + "g carb · " + m.nutrition.fiberG + "g fiber · " + m.nutrition.proteinG + "g protein</span>"
+          ? '<div class="meal__macros">' +
+            macro(m.nutrition.carbsG + "g", "carb") +
+            macro(m.nutrition.fiberG + "g", "fiber") +
+            macro(m.nutrition.proteinG + "g", "protein") +
+            "</div>"
           : "";
         return (
-          '<div class="ing-row">' +
-          '<div class="ing-row__name">' + esc(m.dish) + nutri +
-          '<div class="ing-row__deal"><span class="elsewhere">' + m.ingredients.map((i) => esc(i.name)).join(", ") + "</span></div></div>" +
-          '<div class="ing-row__price"><button type="button" class="swap-btn" data-dish="' + esc(m.dish) + '">↻ swap</button></div>' +
+          '<div class="meal">' +
+          '<div class="meal__top"><span class="meal__num">' + (i + 1) + "</span>" +
+          '<h4 class="meal__dish">' + esc(m.dish) + "</h4>" +
+          '<button type="button" class="swap-btn" data-dish="' + esc(m.dish) + '">↻ swap</button></div>' +
+          nutri +
+          '<p class="meal__ings">' + m.ingredients.map((ing) => esc(ing.name)).join(", ") + "</p>" +
           "</div>"
         );
       })
       .join("");
-    return (
-      '<article class="card breakdown"><div class="breakdown__head"><h3>This week’s dinners</h3>' +
-      '<span class="breakdown__at">all meet your targets ✓</span></div>' +
-      '<div class="ing-table">' + rows + "</div></article>"
-    );
+    const meta = '<span class="panel__pill">all meet your targets ✓</span>';
+    return section("This week’s dinners", meta, '<div class="meal-list">' + rows + "</div>", true);
   }
 
-  function cartCard(cart) {
+  // "Where to shop" — the direction the old UI never gave: named stores, in
+  // visit order, each with an address + a one-tap Google Maps link.
+  function whereSection(cart) {
+    const trips = cart.trips || [];
+    if (!trips.length) return "";
+    const cards = trips
+      .map((t, i) => {
+        const dist = km(t.distanceKm);
+        const line2 = [t.merchant && t.merchant !== t.store ? esc(t.merchant) : "", esc(t.address)]
+          .filter(Boolean)
+          .join(" · ");
+        const stop = trips.length > 1 ? '<span class="store-card__order">Stop ' + (i + 1) + "</span>" : "";
+        return (
+          '<div class="store-card">' +
+          '<div class="store-card__mark">' + esc(initials(t.store)) + "</div>" +
+          '<div class="store-card__info">' +
+          '<div class="store-card__name">' + esc(t.store) + stop +
+          (dist ? '<span class="store-card__dist">' + dist + "</span>" : "") + "</div>" +
+          (line2 ? '<div class="store-card__addr">' + line2 + "</div>" : "") +
+          "</div>" +
+          '<div class="store-card__side">' +
+          '<div class="store-card__sub">' + money(t.realSubtotal) + "</div>" +
+          '<a class="store-card__dir" href="' + esc(mapsUrl(t.store, t.address)) + '" target="_blank" rel="noopener">Directions ↗</a>' +
+          "</div></div>"
+        );
+      })
+      .join("");
+    const lead =
+      trips.length > 1
+        ? trips.length + " stops this week — listed in the order that keeps your cart cheapest."
+        : "One stop covers your whole on-sale list.";
+    const meta = '<span class="panel__pill">' + trips.length + (trips.length === 1 ? " store" : " stores") + "</span>";
+    return section("Where to shop", meta, '<p class="panel__lead">' + lead + "</p>" + cards, true);
+  }
+
+  function cartSection(cart) {
     const tripsHtml = cart.trips
       .map((t) => {
         const head =
           cart.trips.length > 1
-            ? '<div class="breakdown__head"><h3 style="font-size:15px">' + esc(t.store) + '</h3><span class="breakdown__at">' + money(t.realSubtotal) + "</span></div>"
+            ? '<div class="cart-store"><span class="cart-store__name">' + esc(t.store) + '</span><span class="cart-store__sub">' + money(t.realSubtotal) + "</span></div>"
             : "";
         return head + '<div class="ing-table">' + t.items.map(itemRow).join("") + "</div>";
       })
@@ -80,11 +145,8 @@
     const gaps = cart.neverOnSale && cart.neverOnSale.length
       ? '<p class="note">Buy at regular price (not on sale anywhere this week): ' + cart.neverOnSale.map(esc).join(", ") + ".</p>"
       : "";
-    return (
-      '<article class="card breakdown"><div class="breakdown__head"><h3>Weekly shopping cart</h3>' +
-      '<span class="breakdown__at">' + money(cart.fullTotal) + " · " + cart.coverage + "/" + cart.totalIngredients + " on sale</span></div>" +
-      tripsHtml + gaps + "</article>"
-    );
+    const meta = '<span class="panel__meta-val">' + money(cart.fullTotal) + '</span><span class="panel__pill">' + cart.coverage + "/" + cart.totalIngredients + " on sale</span>";
+    return section("Weekly shopping cart", meta, tripsHtml + gaps, false);
   }
 
   function render(data) {
@@ -101,7 +163,8 @@
       save && save > 0.5 ? "saved ~" + money(save) + " vs. regular price" : "best prices we found this week";
     $("heroNote").textContent =
       (data.shortfall > 0 ? data.shortfall + " fewer than asked · " : "") + "not medical advice";
-    $("mealsContainer").innerHTML = menuCard(data.meals) + cartCard(data.cart);
+    $("mealsContainer").innerHTML =
+      whereSection(data.cart) + menuSection(data.meals) + cartSection(data.cart);
     $("status").hidden = true;
     $("results").hidden = false;
   }

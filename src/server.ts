@@ -159,6 +159,9 @@ function toWeekResponse(result: WeekResult, postal: string, people: number) {
       storeCount: cart.storeCount,
       trips: cart.trips.map((t) => ({
         store: t.store.name,
+        merchant: t.store.merchant,
+        address: t.store.address,
+        distanceKm: t.store.distanceKm,
         realSubtotal: t.realSubtotal,
         items: t.items.map(itemDto),
       })),
