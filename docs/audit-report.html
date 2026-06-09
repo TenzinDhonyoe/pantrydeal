@@ -1,0 +1,789 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PantryDeal — Codebase Audit</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --bg-soft: #11151f;
+    --card: #161b27;
+    --card-2: #1b2130;
+    --line: #262d3d;
+    --line-soft: #1e2533;
+    --ink: #e7ecf5;
+    --ink-dim: #9aa6bd;
+    --ink-faint: #6b7689;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+
+    --crit: #ff4d6d;
+    --crit-bg: rgba(255,77,109,.12);
+    --high: #ff8a3d;
+    --high-bg: rgba(255,138,61,.12);
+    --med: #ffd24d;
+    --med-bg: rgba(255,210,77,.10);
+    --low: #5ec2ff;
+    --low-bg: rgba(94,194,255,.10);
+    --ok: #45e0a8;
+    --ok-bg: rgba(69,224,168,.12);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    background: radial-gradient(1200px 600px at 70% -200px, #182135 0%, var(--bg) 55%) no-repeat var(--bg);
+    color: var(--ink);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--low); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 22px 120px; }
+
+  /* ---------- header ---------- */
+  header.hero {
+    padding: 64px 0 36px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 38px;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-bottom: 14px;
+  }
+  h1 {
+    font-size: clamp(34px, 6vw, 58px);
+    line-height: 1.02;
+    margin: 0 0 16px;
+    letter-spacing: -.02em;
+    font-weight: 800;
+  }
+  h1 .grad {
+    background: linear-gradient(95deg, #ff8a3d, #ff4d6d 55%, #c46bff);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .sub { color: var(--ink-dim); font-size: 18px; max-width: 640px; }
+  .meta-row {
+    display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px;
+  }
+  .pill {
+    font-family: var(--mono); font-size: 12.5px;
+    padding: 6px 12px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--bg-soft); color: var(--ink-dim);
+  }
+  .pill b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- dashboard ---------- */
+  .dash {
+    display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 46px;
+  }
+  .stat {
+    grid-column: span 2;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 18px 18px 16px;
+    position: relative;
+    overflow: hidden;
+  }
+  .stat .n { font-size: 34px; font-weight: 800; letter-spacing: -.02em; line-height: 1; }
+  .stat .lbl { color: var(--ink-dim); font-size: 13px; margin-top: 8px; }
+  .stat .spark { font-size: 12px; font-family: var(--mono); margin-top: 6px; }
+  .stat.good .n { color: var(--ok); }
+  .stat.warn .n { color: var(--med); }
+  .stat.bad  .n { color: var(--crit); }
+  .stat::after {
+    content:""; position:absolute; right:-30px; top:-30px; width:110px; height:110px;
+    background: radial-gradient(circle, currentColor, transparent 70%); opacity:.07;
+  }
+  @media (max-width: 720px){
+    .dash { grid-template-columns: repeat(2, 1fr); }
+    .stat { grid-column: span 1; }
+  }
+
+  /* ---------- severity legend / controls ---------- */
+  .controls {
+    display:flex; flex-wrap:wrap; align-items:center; gap:10px;
+    margin: 0 0 26px; padding: 14px 16px;
+    background: var(--bg-soft); border:1px solid var(--line); border-radius: 14px;
+    position: sticky; top: 0; z-index: 20;
+    backdrop-filter: blur(8px);
+  }
+  .controls .hint { color: var(--ink-faint); font-size: 13px; margin-right: 4px; }
+  .chip {
+    font: 600 13px/1 var(--sans);
+    padding: 8px 13px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--line); background: transparent; color: var(--ink-dim);
+    display:inline-flex; align-items:center; gap:7px; transition: .15s;
+  }
+  .chip .dot { width:9px; height:9px; border-radius:50%; }
+  .chip[data-on="true"] { color: var(--ink); border-color: var(--ink-faint); background: var(--card-2); }
+  .chip[data-on="false"] { opacity:.42; }
+  .dot.crit{background:var(--crit)} .dot.high{background:var(--high)}
+  .dot.med{background:var(--med)} .dot.low{background:var(--low)}
+
+  /* ---------- section ---------- */
+  .section-head {
+    display:flex; align-items:baseline; gap:14px; margin: 50px 0 18px;
+  }
+  .section-head h2 {
+    font-size: 24px; margin:0; letter-spacing:-.01em;
+  }
+  .section-head .icn { font-size: 22px; }
+  .section-head .count { color: var(--ink-faint); font-family: var(--mono); font-size:13px; }
+  .section-head .ln { flex:1; height:1px; background: var(--line-soft); }
+
+  /* ---------- finding cards ---------- */
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px){ .grid { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-left-width: 3px;
+    border-radius: 14px;
+    padding: 18px;
+    transition: transform .12s, border-color .12s;
+  }
+  .card:hover { transform: translateY(-2px); border-color: var(--ink-faint); }
+  .card.sev-critical { border-left-color: var(--crit); }
+  .card.sev-high { border-left-color: var(--high); }
+  .card.sev-med { border-left-color: var(--med); }
+  .card.sev-low { border-left-color: var(--low); }
+
+  .card-top { display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+  .id {
+    font-family: var(--mono); font-weight:700; font-size:13px;
+    padding:3px 8px; border-radius:7px; background: var(--card-2); color: var(--ink);
+    border:1px solid var(--line);
+  }
+  .badge {
+    font: 700 10.5px/1 var(--mono); letter-spacing:.08em; text-transform:uppercase;
+    padding:5px 8px; border-radius:6px;
+  }
+  .badge.critical { color: var(--crit); background: var(--crit-bg); }
+  .badge.high { color: var(--high); background: var(--high-bg); }
+  .badge.med { color: var(--med); background: var(--med-bg); }
+  .badge.low { color: var(--low); background: var(--low-bg); }
+  .effort {
+    margin-left:auto; font-family: var(--mono); font-size:12px; color: var(--ink-faint);
+    display:inline-flex; align-items:center; gap:6px;
+  }
+  .effort .e { width:7px; height:13px; border-radius:2px; background: var(--line); display:inline-block; }
+  .effort .e.on { background: var(--ink-dim); }
+
+  .card h3 { font-size: 16px; margin: 2px 0 8px; letter-spacing:-.01em; }
+  .file {
+    font-family: var(--mono); font-size: 12px; color: var(--low);
+    background: var(--bg-soft); border:1px solid var(--line-soft);
+    padding:4px 8px; border-radius:7px; display:inline-block; margin-bottom:12px; word-break: break-all;
+  }
+  .desc { color: var(--ink-dim); font-size: 14px; margin: 0 0 14px; }
+  .desc code {
+    font-family: var(--mono); font-size: 12.5px; background: var(--bg-soft);
+    padding: 1px 5px; border-radius: 5px; color: #ffc9a3;
+  }
+
+  /* visual "what happens" block */
+  .viz {
+    background: var(--bg-soft); border:1px solid var(--line-soft); border-radius:11px;
+    padding: 13px 14px; margin-bottom: 13px; font-size:13.5px;
+  }
+  .viz-label { font: 700 10px/1 var(--mono); letter-spacing:.12em; text-transform:uppercase; color: var(--ink-faint); margin-bottom:10px; }
+  .flow { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .flow .box {
+    font-family: var(--mono); font-size:12.5px; padding:7px 10px; border-radius:8px;
+    border:1px solid var(--line); background: var(--card-2); color: var(--ink);
+  }
+  .flow .arrow { color: var(--ink-faint); font-size:15px; }
+  .flow .bad-out { border-color: var(--crit); color: var(--crit); background: var(--crit-bg); }
+  .flow .ok-out { border-color: var(--ok); color: var(--ok); background: var(--ok-bg); }
+  .tag-bad { color: var(--crit); } .tag-ok { color: var(--ok); }
+
+  .fix {
+    display:flex; gap:9px; align-items:flex-start; font-size:13.5px;
+    border-top:1px dashed var(--line); padding-top:12px; color: var(--ink);
+  }
+  .fix .k { color: var(--ok); font-weight:700; font-family: var(--mono); font-size:11px; letter-spacing:.08em; flex-shrink:0; padding-top:2px; }
+
+  /* ---------- ranked list ---------- */
+  .ranked { counter-reset: r; display:flex; flex-direction:column; gap:10px; }
+  .rank {
+    display:flex; gap:16px; align-items:flex-start;
+    background: var(--card); border:1px solid var(--line); border-radius:13px; padding:15px 18px;
+  }
+  .rank::before {
+    counter-increment: r; content: counter(r);
+    font: 800 20px/1 var(--sans); color: var(--ink);
+    background: linear-gradient(135deg, #2a3346, #1a2030);
+    border:1px solid var(--line); border-radius:10px;
+    min-width:38px; height:38px; display:flex; align-items:center; justify-content:center;
+    flex-shrink:0;
+  }
+  .rank:nth-child(1)::before { background: linear-gradient(135deg, #ff8a3d, #ff4d6d); color:#1a0d08; border:0; }
+  .rank:nth-child(2)::before { background: linear-gradient(135deg, #ffd24d, #ff8a3d); color:#231405; border:0; }
+  .rank:nth-child(3)::before { background: linear-gradient(135deg, #5ec2ff, #c46bff); color:#0a1020; border:0; }
+  .rank .body { flex:1; }
+  .rank .rtitle { font-weight:700; font-size:15px; margin-bottom:4px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;}
+  .rank .why { color: var(--ink-dim); font-size:13.5px; }
+  .rank .refs { font-family: var(--mono); font-size:11px; color: var(--ink-faint); }
+
+  /* ---------- risk + unsure ---------- */
+  .panel {
+    background: var(--card); border:1px solid var(--line); border-radius:14px; padding:20px 22px; margin-top:14px;
+  }
+  .panel.risk { border-color: rgba(255,138,61,.35); background: linear-gradient(180deg, rgba(255,138,61,.05), transparent); }
+  .panel.unsure { border-color: rgba(94,194,255,.30); background: linear-gradient(180deg, rgba(94,194,255,.05), transparent); }
+  .panel h3 { margin:0 0 14px; font-size:17px; display:flex; gap:9px; align-items:center; }
+  .panel ul { margin:0; padding-left:0; list-style:none; display:flex; flex-direction:column; gap:12px; }
+  .panel li { display:flex; gap:11px; font-size:14px; color: var(--ink-dim); }
+  .panel li .m { font-family: var(--mono); font-size:11px; color:#ffc9a3; background: var(--bg-soft); border:1px solid var(--line-soft); padding:2px 7px; border-radius:6px; flex-shrink:0; height:fit-content; }
+  .panel li b { color: var(--ink); }
+  .panel.unsure li::before { content:"?"; color: var(--low); font-weight:800; font-family: var(--mono); flex-shrink:0; }
+
+  footer {
+    margin-top: 70px; padding-top: 26px; border-top:1px solid var(--line);
+    color: var(--ink-faint); font-size:13px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px;
+  }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="eyebrow">Read-only audit · no files changed</div>
+    <h1>PantryDeal <span class="grad">code audit</span></h1>
+    <p class="sub">20 findings across bugs, security, dead code, tests, and performance — each one with the file, what actually goes wrong, and the smallest safe fix.</p>
+    <div class="meta-row">
+      <span class="pill"><b>TypeScript</b> · strict · ESM</span>
+      <span class="pill">Node <b>≥20</b></span>
+      <span class="pill"><b>0</b> runtime deps</span>
+      <span class="pill">~7.3k LOC</span>
+      <span class="pill">Audited <b>2026-06-09</b></span>
+    </div>
+  </header>
+
+  <!-- DASHBOARD -->
+  <div class="dash">
+    <div class="stat good"><div class="n">214</div><div class="lbl">tests passing</div><div class="spark" style="color:var(--ok)">16 files · 0 failing</div></div>
+    <div class="stat good"><div class="n">100%</div><div class="lbl">core line coverage</div><div class="spark" style="color:var(--ink-faint)">branches 97% · core only</div></div>
+    <div class="stat good"><div class="n">clean</div><div class="lbl">tsc + eslint</div><div class="spark" style="color:var(--ink-faint)">strict, noUncheckedIndexedAccess</div></div>
+    <div class="stat bad"><div class="n">6</div><div class="lbl">npm vulnerabilities</div><div class="spark" style="color:var(--crit)">2 critical · dev-only</div></div>
+    <div class="stat warn"><div class="n">20</div><div class="lbl">findings</div><div class="spark" style="color:var(--med)">0 critical in app code</div></div>
+    <div class="stat good"><div class="n">0</div><div class="lbl">secrets in source</div><div class="spark" style="color:var(--ok)">.env never committed</div></div>
+  </div>
+
+  <!-- CONTROLS -->
+  <div class="controls">
+    <span class="hint">Filter by severity</span>
+    <button class="chip" data-on="true" data-sev="critical"><span class="dot crit"></span>Critical</button>
+    <button class="chip" data-on="true" data-sev="high"><span class="dot high"></span>High</button>
+    <button class="chip" data-on="true" data-sev="med"><span class="dot med"></span>Medium</button>
+    <button class="chip" data-on="true" data-sev="low"><span class="dot low"></span>Low</button>
+  </div>
+
+  <!-- ============ BUGS ============ -->
+  <div class="section-head">
+    <span class="icn">🐛</span><h2>Bugs &amp; broken edge cases</h2>
+    <span class="count">7 findings</span><span class="ln"></span>
+  </div>
+  <div class="grid">
+
+    <article class="card sev-high" data-sev="high">
+      <div class="card-top"><span class="id">B1</span><span class="badge high">High</span>
+        <span class="effort" title="Effort: Small"><span class="e on"></span><span class="e"></span><span class="e"></span> S</span></div>
+      <h3>Safety gate matches substrings, not words</h3>
+      <div class="file">src/core/nutrition.ts:133</div>
+      <p class="desc">The prediabetes blocklist uses <code>name.includes(b)</code>, but its own doc comment promises whole-word matching. Wholesome foods get wrongly rejected by the <em>clinical</em> gate.</p>
+      <div class="viz">
+        <div class="viz-label">What happens</div>
+        <div class="flow">
+          <span class="box">"sugar snap peas"</span><span class="arrow">→</span>
+          <span class="box">contains <b>"sugar"</b></span><span class="arrow">→</span>
+          <span class="box bad-out">🚫 BLOCKED</span>
+        </div>
+        <div class="flow" style="margin-top:9px">
+          <span class="box">"lemon juice"</span><span class="arrow">→</span>
+          <span class="box">contains <b>"juice"</b></span><span class="arrow">→</span>
+          <span class="box bad-out">🚫 BLOCKED</span>
+        </div>
+      </div>
+      <div class="fix"><span class="k">FIX</span><span>Reuse the word-boundary <code>matchesKey()</code> already written in <code>swaps.ts:50</code> — that file fixed this exact bug class; the safety gate still has it.</span></div>
+    </article>
+
+    <article class="card sev-high" data-sev="high">
+      <div class="card-top"><span class="id">B2</span><span class="badge high">High</span>
+        <span class="effort" title="Effort: Medium"><span class="e on"></span><span class="e on"></span><span class="e"></span> M</span></div>
+      <h3>One flyer item can satisfy only one ingredient</h3>
+      <div class="file">src/integrations/geminiAnalyzer.ts:305</div>
+      <p class="desc">Assignments are keyed by item in a <code>Map&lt;FlyerItem,string&gt;</code> and the item's price is mutated in place. If the LLM assigns the same item to two ingredients, the second write silently overwrites the first.</p>
+      <div class="viz">
+        <div class="viz-label">What happens</div>
+        <div class="flow">
+          <span class="box">"Onions 2 lb"</span><span class="arrow">→</span>
+          <span class="box">onion <span class="tag-ok">✓</span></span>
+          <span class="box">green onion <span class="tag-ok">✓</span></span>
+          <span class="arrow">→</span>
+          <span class="box bad-out">last write wins · 1 goes UNMATCHED</span>
+        </div>
+      </div>
+      <div class="fix"><span class="k">FIX</span><span>Key by the <code>(item, ingredient)</code> pair instead of the item; stop mutating the shared item's <code>rawPrice</code>/<code>size</code>. Live-only &amp; subtle — add a test harness first (T2).</span></div>
+    </article>
+
+    <article class="card sev-med" data-sev="med">
+      <div class="card-top"><span class="id">B3</span><span class="badge med">Medium</span>
+        <span class="effort"><span class="e on"></span><span class="e"></span><span class="e"></span> S</span></div>
+      <h3>"Vegan" is treated as "vegetarian"</h3>
+      <div class="file">src/runner.ts:205, 237</div>
+      <p class="desc">A vegan restriction only filters the same 7-item meat list as vegetarian — and that list misses lamb, ham, bacon. Vegans get recipes with dairy &amp; eggs.</p>
+      <div class="viz">
+        <div class="viz-label">What happens</div>
+        <div class="flow">
+          <span class="box">restriction: <b>"vegan"</b></span><span class="arrow">→</span>
+          <span class="box bad-out">🥚 egg · 🧀 cheese · 🥛 yogurt allowed</span>
+        </div>
+      </div>
+      <div class="fix"><span class="k">FIX</span><span>Separate vegan/vegetarian exclusion sets; add dairy, egg, lamb, pork products. A stated hard constraint is being violated.</span></div>
+    </article>
+
+    <article class="card sev-med" data-sev="med">
+      <div class="card-top"><span class="id">B4</span><span class="badge med">Medium</span>
+        <span class="effort"><span class="e on"></span><span class="e on"></span><span class="e"></span> M</span></div>
+      <h3>Promo text parses as a price</h3>
+      <div class="file">src/core/normalize.ts:84</div>
+      <p class="desc">The bare-number fallback (for legit "1.29 ea") also grabs the first number in marketing copy from live flyers, producing nonsense prices that distort ranking.</p>
+      <div class="viz">
+        <div class="viz-label">What happens</div>
+        <div class="flow">
+          <span class="box">"save $3"</span><span class="arrow">→</span><span class="box bad-out">price = $3.00</span>
+        </div>
+        <div class="flow" style="margin-top:9px">
+          <span class="box">"3 days only"</span><span class="arrow">→</span><span class="box bad-out">price = $3.00</span>
+        </div>
+      </div>
+      <div class="fix"><span class="k">FIX</span><span>Reject promo-shaped strings ("save", "% off", "days") before the fallback. <b>Risky</b> — pin real Backflipp strings in a golden fixture first.</span></div>
+    </article>
+
+    <article class="card sev-med" data-sev="med">
+      <div class="card-top"><span class="id">B5</span><span class="badge med">Medium</span>
+        <span class="effort"><span class="e on"></span><span class="e"></span><span class="e"></span> S</span></div>
+      <h3>Installed package's offline mode is broken</h3>
+      <div class="file">src/runner.ts:53 · package.json</div>
+      <p class="desc">The package ships only <code>dist</code> + <code>web</code>, but the default fixture path points at <code>../test/fixtures/flyers</code> — absent after a global install.</p>
+      <div class="viz">
+        <div class="viz-label">What happens</div>
+        <div class="flow">
+          <span class="box">npm i -g · run offline</span><span class="arrow">→</span>
+          <span class="box bad-out">statSync ENOENT 💥</span>
+        </div>
+      </div>
+      <div class="fix"><span class="k">FIX</span><span>Ship fixtures in <code>files</code>, or embed defaults in <code>dist</code>. (Non-issue if repo-checkout is the only intended workflow.)</span></div>
+    </article>
+
+    <article class="card sev-low" data-sev="low">
+      <div class="card-top"><span class="id">B6</span><span class="badge low">Low</span>
+        <span class="effort"><span class="e on"></span><span class="e"></span><span class="e"></span> S</span></div>
+      <h3><code>--radius</code> is unvalidated</h3>
+      <div class="file">src/cli.ts:45</div>
+      <p class="desc"><code>Number(argv[++i])</code> with no guard. <code>--radius abc</code> → NaN → every store filtered out → a misleading "no nearby stores".</p>
+      <div class="viz">
+        <div class="viz-label">What happens</div>
+        <div class="flow">
+          <span class="box">--radius abc</span><span class="arrow">→</span><span class="box">NaN</span><span class="arrow">→</span>
+          <span class="box bad-out">"No nearby stores found"</span>
+        </div>
+      </div>
+      <div class="fix"><span class="k">FIX</span><span>Validate like <code>--people</code> already does at <code>cli.ts:38</code>.</span></div>
+    </article>
+
+    <article class="card sev-low" data-sev="low">
+      <div class="card-top"><span class="id">B7</span><span class="badge low">Low</span>
+        <span class="effort"><span class="e on"></span><span class="e"></span><span class="e"></span> S</span></div>
+      <h3>Gemini recipe output isn't sanitized</h3>
+      <div class="file">src/integrations/geminiRecipe.ts:122</div>
+      <p class="desc">Unlike the URL parser, this path doesn't filter zero/NaN <code>qtyGrams</code> or empty names — NaN line costs could silently skew ranking math.</p>
+      <div class="viz">
+        <div class="viz-label">What happens</div>
+        <div class="flow">
+          <span class="box">qtyGrams: NaN</span><span class="arrow">→</span><span class="box">lineCost = NaN</span><span class="arrow">→</span>
+          <span class="box bad-out">ranking comparison undefined</span>
+        </div>
+      </div>
+      <div class="fix"><span class="k">FIX</span><span>Apply the same filter the URL parser uses at <code>recipeUrl.ts:379</code>.</span></div>
+    </article>
+
+  </div>
+
+  <!-- ============ SECURITY ============ -->
+  <div class="section-head">
+    <span class="icn">🔒</span><h2>Security</h2>
+    <span class="count">6 findings</span><span class="ln"></span>
+  </div>
+  <div class="grid">
+
+    <article class="card sev-high" data-sev="high">
+      <div class="card-top"><span class="id">S1</span><span class="badge high">High</span><span class="badge low">dev-only</span>
+        <span class="effort"><span class="e on"></span><span class="e"></span><span class="e"></span> S</span></div>
+      <h3>Critical dev-dependency advisories</h3>
+      <div class="file">package.json · vitest@2.1.9 chain</div>
+      <p class="desc"><code>npm audit</code> flags 2 critical (vitest UI server arbitrary file read/execute) + 4 moderate (esbuild dev-server, vite path traversal). Exposure is dev-only.</p>
+      <div class="viz">
+        <div class="viz-label">Severity breakdown</div>
+        <div class="flow">
+          <span class="box bad-out">2 critical</span>
+          <span class="box" style="border-color:var(--med);color:var(--med)">4 moderate</span>
+          <span class="arrow">→</span>
+          <span class="box ok-out">routine version bump</span>
+        </div>
+      </div>
+      <div class="fix"><span class="k">FIX</span><span>Bump <code>vitest</code> + <code>@vitest/coverage-v8</code> to v4. Config is near-compatible for this simple setup.</span></div>
+    </article>
+
+    <article class="card sev-med" data-sev="med">
+      <div class="card-top"><span class="id">S2</span><span class="badge med">Medium</span>
+        <span class="effort"><span class="e on"></span><span class="e"></span><span class="e"></span> S</span></div>
+      <h3>500s leak internal error text</h3>
+      <div class="file">src/server.ts:258, 291</div>
+      <p class="desc">Two handlers return raw <code>err.message</code>, which can embed upstream vendor error bodies. The third handler already redacts correctly.</p>
+      <div class="viz">
+        <div class="viz-label">What happens</div>
+        <div class="flow">
+          <span class="box">Gemini 4xx body</span><span class="arrow">→</span>
+          <span class="box bad-out">forwarded to client verbatim</span>
+        </div>
+        <div class="flow" style="margin-top:9px">
+          <span class="box">handleRecipe</span><span class="arrow">→</span>
+          <span class="box ok-out">already redacts ✓</span>
+        </div>
+      </div>
+      <div class="fix"><span class="k">FIX</span><span>Copy the existing pattern from <code>handleRecipe</code> (<code>server.ts:337</code>): log internally, return a generic message.</span></div>
+    </article>
+
+    <article class="card sev-med" data-sev="med">
+      <div class="card-top"><span class="id">S3</span><span class="badge med">Medium</span>
+        <span class="effort"><span class="e on"></span><span class="e"></span><span class="e"></span> S</span></div>
+      <h3>Unbounded request body</h3>
+      <div class="file">src/server.ts:54</div>
+      <p class="desc"><code>readBody</code> buffers the whole request with no cap — trivial memory exhaustion the moment it's reachable beyond localhost.</p>
+      <div class="viz">
+        <div class="viz-label">What happens</div>
+        <div class="flow">
+          <span class="box">POST 2 GB body</span><span class="arrow">→</span>
+          <span class="box bad-out">buffered into memory 💥</span>
+        </div>
+      </div>
+      <div class="fix"><span class="k">FIX</span><span>Cap at ~64 KB, return <code>413</code>.</span></div>
+    </article>
+
+    <article class="card sev-low" data-sev="low">
+      <div class="card-top"><span class="id">S4</span><span class="badge low">Low</span>
+        <span class="effort"><span class="e on"></span><span class="e on"></span><span class="e"></span> M</span></div>
+      <h3>No auth or rate limit on the API</h3>
+      <div class="file">src/server.ts · /api/*</div>
+      <p class="desc">Anyone who can reach the server can burn your Gemini credits — <code>/api/recipe</code> is unconditionally live. Fine for localhost, a hazard on deploy.</p>
+      <div class="viz">
+        <div class="viz-label">What happens</div>
+        <div class="flow">
+          <span class="box">loop POST /api/recipe</span><span class="arrow">→</span>
+          <span class="box bad-out">💸 unbounded LLM spend</span>
+        </div>
+      </div>
+      <div class="fix"><span class="k">FIX</span><span>Add a simple rate limit / token before any non-local deployment.</span></div>
+    </article>
+
+    <article class="card sev-low" data-sev="low">
+      <div class="card-top"><span class="id">S5</span><span class="badge low">Low</span>
+        <span class="effort"><span class="e on"></span><span class="e"></span><span class="e"></span> S</span></div>
+      <h3>Weak static-path prefix check</h3>
+      <div class="file">src/server.ts:348</div>
+      <p class="desc"><code>startsWith(WEB_DIR)</code> with no trailing separator — the classic <code>/web</code> vs <code>/webby</code> sibling bypass. Currently unreachable thanks to upstream sanitization; defense-in-depth.</p>
+      <div class="viz">
+        <div class="viz-label">The shape</div>
+        <div class="flow">
+          <span class="box">/app/web-secret/…</span><span class="arrow">→</span>
+          <span class="box">startsWith("/app/web") <span class="tag-bad">true</span></span>
+        </div>
+      </div>
+      <div class="fix"><span class="k">FIX</span><span>Compare against <code>WEB_DIR + path.sep</code>.</span></div>
+    </article>
+
+    <article class="card sev-low" data-sev="low">
+      <div class="card-top"><span class="id">S6</span><span class="badge low">Low</span>
+        <span class="effort"><span class="e on"></span><span class="e"></span><span class="e"></span> S</span></div>
+      <h3>SSRF allow-list has small gaps</h3>
+      <div class="file">src/integrations/recipeUrl.ts:56</div>
+      <p class="desc">The guard is genuinely good (per-hop DNS check, manual redirects, caps) but <code>isPrivateIPv4</code> misses 198.18/15, 192.0.0/24 and multicast. DNS-rebind TOCTOU is known &amp; documented.</p>
+      <div class="viz">
+        <div class="viz-label">Already blocked ✓</div>
+        <div class="flow">
+          <span class="box ok-out">127.x · 10.x · 169.254.x · ::1</span>
+        </div>
+        <div class="viz-label" style="margin-top:10px">Missing</div>
+        <div class="flow">
+          <span class="box" style="border-color:var(--med);color:var(--med)">198.18/15 · multicast</span>
+        </div>
+      </div>
+      <div class="fix"><span class="k">FIX</span><span>Add the missing reserved IPv4 ranges.</span></div>
+    </article>
+
+  </div>
+
+  <!-- ============ DEAD CODE ============ -->
+  <div class="section-head">
+    <span class="icn">🗑️</span><h2>Dead &amp; unreachable code</h2>
+    <span class="count">3 findings</span><span class="ln"></span>
+  </div>
+  <div class="grid">
+
+    <article class="card sev-low" data-sev="low">
+      <div class="card-top"><span class="id">D1</span><span class="badge low">Low</span>
+        <span class="effort"><span class="e on"></span><span class="e"></span><span class="e"></span> S</span></div>
+      <h3>4 unused integration modules</h3>
+      <div class="file">integrations/{claudeRecipe,googlePlaces,usdaNutrition,geminiMeals}.ts</div>
+      <p class="desc">Imported nowhere in <code>src/</code> or <code>test/</code>. Two are documented alternates; <code>geminiMeals</code>' review queue has no consumer at all. <code>claudeRecipe</code> also ignores <code>servings</code> and slices JSON by <code>indexOf('{')</code>.</p>
+      <div class="fix"><span class="k">FIX</span><span>Delete, or move to a <code>tools/</code> curation area so intent is explicit.</span></div>
+    </article>
+
+    <article class="card sev-low" data-sev="low">
+      <div class="card-top"><span class="id">D2</span><span class="badge low">Low</span>
+        <span class="effort"><span class="e on"></span><span class="e"></span><span class="e"></span> S</span></div>
+      <h3>Misleading <code>maxStores</code> contract</h3>
+      <div class="file">src/core/optimize.ts:69</div>
+      <p class="desc">Doc says "1 or 2"; any value ≥2 silently behaves as 2 — only pairs are enumerated. A latent trap, not a live bug.</p>
+      <div class="fix"><span class="k">FIX</span><span>Either honor N stores or document the hard cap of 2.</span></div>
+    </article>
+
+    <article class="card sev-low" data-sev="low">
+      <div class="card-top"><span class="id">D3</span><span class="badge low">Low</span>
+        <span class="effort"><span class="e on"></span><span class="e"></span><span class="e"></span> S</span></div>
+      <h3>Stray <code>Untitled</code> junk file</h3>
+      <div class="file">/Untitled</div>
+      <p class="desc">Gitignored scratch file at repo root holding an empty <code>GEMINI_API_KEY=</code> line.</p>
+      <div class="fix"><span class="k">FIX</span><span>Delete it.</span></div>
+    </article>
+
+  </div>
+
+  <!-- ============ TESTS ============ -->
+  <div class="section-head">
+    <span class="icn">🧪</span><h2>Missing &amp; weak tests</h2>
+    <span class="count">3 findings</span><span class="ln"></span>
+  </div>
+  <div class="grid">
+
+    <article class="card sev-med" data-sev="med">
+      <div class="card-top"><span class="id">T1</span><span class="badge med">Medium</span>
+        <span class="effort"><span class="e on"></span><span class="e on"></span><span class="e"></span> M</span></div>
+      <h3>Coverage measures only <code>src/core/</code></h3>
+      <div class="file">vitest.config.ts</div>
+      <p class="desc">The 100% headline excludes real logic: <code>runner.ts</code> (week planner, cart pooling), <code>server.ts</code> (all 4 handlers), and <code>cli.ts</code> have zero tests.</p>
+      <div class="viz">
+        <div class="viz-label">Coverage reality</div>
+        <div class="flow">
+          <span class="box ok-out">core/ · 100%</span>
+          <span class="box bad-out">runner.ts · 0%</span>
+          <span class="box bad-out">server.ts · 0%</span>
+          <span class="box bad-out">cli.ts · 0%</span>
+        </div>
+      </div>
+      <div class="fix"><span class="k">FIX</span><span>Test the planner + handlers (fakes &amp; fixtures already exist); widen the coverage <code>include</code>.</span></div>
+    </article>
+
+    <article class="card sev-med" data-sev="med">
+      <div class="card-top"><span class="id">T2</span><span class="badge med">Medium</span>
+        <span class="effort"><span class="e on"></span><span class="e on"></span><span class="e"></span> M</span></div>
+      <h3>GeminiAnalyzer orchestration untested</h3>
+      <div class="file">src/integrations/geminiAnalyzer.ts (429 LOC)</div>
+      <p class="desc">Subtle cache split/write + coverage-floor fallback logic — eminently testable with a fake <code>fetchImpl</code>, and it's where bug B2 lives.</p>
+      <div class="fix"><span class="k">FIX</span><span>Inject a fake <code>fetchImpl</code>; cover <code>splitCache</code>, <code>writeCache</code>, and the coverage-floor judgment.</span></div>
+    </article>
+
+    <article class="card sev-low" data-sev="low">
+      <div class="card-top"><span class="id">T3</span><span class="badge low">Low</span>
+        <span class="effort"><span class="e on"></span><span class="e"></span><span class="e"></span> S</span></div>
+      <h3>Test files are never type-checked</h3>
+      <div class="file">tsconfig.json</div>
+      <p class="desc"><code>tsconfig</code> excludes <code>test/</code> and vitest doesn't typecheck, so type errors in tests go unseen.</p>
+      <div class="fix"><span class="k">FIX</span><span>Add a <code>tsconfig.test.json</code> + a <code>typecheck</code> script covering <code>test/</code>.</span></div>
+    </article>
+
+  </div>
+
+  <!-- ============ PERF ============ -->
+  <div class="section-head">
+    <span class="icn">⚡</span><h2>Performance</h2>
+    <span class="count">3 findings</span><span class="ln"></span>
+  </div>
+  <div class="grid">
+
+    <article class="card sev-med" data-sev="med">
+      <div class="card-top"><span class="id">P1</span><span class="badge med">Medium</span>
+        <span class="effort"><span class="e on"></span><span class="e"></span><span class="e"></span> S</span></div>
+      <h3>Backflipp fetches terms one-at-a-time</h3>
+      <div class="file">src/integrations/backflipp.ts:131</div>
+      <p class="desc">Sequential HTTP per search term, and it throws on the first failed term. The live week planner sends 40+ terms → 40+ serial round-trips, and one flaky term kills the whole plan.</p>
+      <div class="viz">
+        <div class="viz-label">What happens</div>
+        <div class="flow">
+          <span class="box">term 1</span><span class="arrow">→</span><span class="box">term 2</span><span class="arrow">→</span>
+          <span class="box">… ×40 serial</span><span class="arrow">→</span><span class="box bad-out">any 1 fails = total fail</span>
+        </div>
+      </div>
+      <div class="fix"><span class="k">FIX</span><span>Bounded-concurrency fetch; tolerate per-term failures. Directly cuts the "~30s" the UI apologizes for.</span></div>
+    </article>
+
+    <article class="card sev-med" data-sev="med">
+      <div class="card-top"><span class="id">P2</span><span class="badge med">Medium</span>
+        <span class="effort"><span class="e on"></span><span class="e"></span><span class="e"></span> S</span></div>
+      <h3>No timeouts on most upstream fetches</h3>
+      <div class="file">backflipp.ts · zippopotam.ts · gemini*.ts</div>
+      <p class="desc">Only the recipe-URL fetcher uses an AbortController. A hung upstream hangs the whole API request indefinitely.</p>
+      <div class="viz">
+        <div class="viz-label">What happens</div>
+        <div class="flow">
+          <span class="box">upstream stalls</span><span class="arrow">→</span><span class="box bad-out">request hangs forever ∞</span>
+        </div>
+      </div>
+      <div class="fix"><span class="k">FIX</span><span>Add AbortController timeouts mirroring <code>recipeUrl.ts:125</code>.</span></div>
+    </article>
+
+    <article class="card sev-low" data-sev="low">
+      <div class="card-top"><span class="id">P3</span><span class="badge low">Low</span>
+        <span class="effort"><span class="e on"></span><span class="e"></span><span class="e"></span> S</span></div>
+      <h3>optimizePlan is O(stores²)</h3>
+      <div class="file">src/core/optimize.ts:201</div>
+      <p class="desc">Enumerates every store pair × ingredients. Fine at flyer scale (~20 merchants) — just don't ever feed it hundreds of stores.</p>
+      <div class="viz">
+        <div class="viz-label">Scaling</div>
+        <div class="flow">
+          <span class="box ok-out">20 stores · fine</span>
+          <span class="arrow">→</span>
+          <span class="box" style="border-color:var(--med);color:var(--med)">500 stores · slow</span>
+        </div>
+      </div>
+      <div class="fix"><span class="k">FIX</span><span>Cap candidate stores before pairing if the source ever grows.</span></div>
+    </article>
+
+  </div>
+
+  <!-- ============ TOP 10 ============ -->
+  <div class="section-head">
+    <span class="icn">🏆</span><h2>Top 10 worth doing</h2>
+    <span class="count">ranked by value ÷ effort</span><span class="ln"></span>
+  </div>
+  <div class="ranked">
+    <div class="rank"><div class="body">
+      <div class="rtitle">Fix the blocklist substring match <span class="badge high">B1</span></div>
+      <div class="why">It's the <b>clinical safety gate</b>, the comment already promises the right behavior, the fix is ~5 lines copied from <code>swaps.ts</code>, and it's already test-covered. Highest correctness-per-effort in the repo.</div>
+    </div></div>
+    <div class="rank"><div class="body">
+      <div class="rtitle">Bump vitest to v4 <span class="badge high">S1</span></div>
+      <div class="why">Two criticals gone for a dev-dep version bump; config is near-compatible.</div>
+    </div></div>
+    <div class="rank"><div class="body">
+      <div class="rtitle">Stop leaking <code>err.message</code> in two handlers <span class="badge med">S2</span></div>
+      <div class="why">The correct pattern already exists in <code>handleRecipe</code> — just make the other two consistent.</div>
+    </div></div>
+    <div class="rank"><div class="body">
+      <div class="rtitle">Vegan / vegetarian restrictions <span class="badge med">B3</span></div>
+      <div class="why">A user's hard dietary constraint is being violated. Small &amp; contained — but write tests first, <code>recipeAllowed</code> has none.</div>
+    </div></div>
+    <div class="rank"><div class="body">
+      <div class="rtitle">Parallelize Backflipp + add fetch timeouts <span class="badge med">P1</span><span class="badge med">P2</span></div>
+      <div class="why">Directly attacks the ~30s UX the frontend apologizes for, and removes the one-flaky-term-kills-everything failure mode.</div>
+    </div></div>
+    <div class="rank"><div class="body">
+      <div class="rtitle">Tests for <code>runner.ts</code> &amp; <code>server.ts</code> <span class="badge med">T1</span></div>
+      <div class="why">Everything else lands safer once the planner and handlers are pinned. DI design makes this cheap.</div>
+    </div></div>
+    <div class="rank"><div class="body">
+      <div class="rtitle">Per-(item, ingredient) assignments <span class="badge high">B2</span></div>
+      <div class="why">Real bug, but the subtlest code in the repo and live-only — do it <em>after</em> T2 gives you a harness.</div>
+    </div></div>
+    <div class="rank"><div class="body">
+      <div class="rtitle">Request body cap <span class="badge med">S3</span></div>
+      <div class="why">Three lines; removes the cheapest DoS.</div>
+    </div></div>
+    <div class="rank"><div class="body">
+      <div class="rtitle">Promo-text price guard <span class="badge med">B4</span></div>
+      <div class="why">Genuine mispricing risk on live data — but risky: the same fallback parses legit "1.29 ea". Needs golden fixtures of real strings first.</div>
+    </div></div>
+    <div class="rank"><div class="body">
+      <div class="rtitle">Fixture path in the published package <span class="badge med">B5</span></div>
+      <div class="why">Only matters if npm distribution is intended; otherwise demote &amp; document.</div>
+    </div></div>
+  </div>
+
+  <!-- ============ RISK ============ -->
+  <div class="section-head">
+    <span class="icn">⚠️</span><h2>Risky to change — handle with care</h2>
+    <span class="ln"></span>
+  </div>
+  <div class="panel risk">
+    <ul>
+      <li><span class="m">normalize.ts · optimize.ts</span><span>Every price and ranking flows through them; small regex/threshold changes shift which store "wins". Well-tested — <b>extend tests before editing</b> (B4 especially).</span></li>
+      <li><span class="m">geminiAnalyzer.ts</span><span>Deliberate, documented cache invariants ("never cache a misfired batch's rejects"). B2's fix must not break the cache key or the item-mutation contract the fixture client relies on.</span></li>
+      <li><span class="m">REGULAR_MARKUP ×2</span><span>The 1.25 markup is defined independently in <code>optimize.ts:16</code> and <code>rank.ts:34</code>. If you consolidate, know that <b>both ranking and savings displays move</b>.</span></li>
+    </ul>
+  </div>
+
+  <!-- ============ UNSURE ============ -->
+  <div class="section-head">
+    <span class="icn">❓</span><h2>Confirm before touching</h2>
+    <span class="ln"></span>
+  </div>
+  <div class="panel unsure">
+    <ul>
+      <li><b>Deployment intent.</b>&nbsp;Everything reads localhost-hobby; if exposed even on a LAN, S2/S3/S4 jump in severity.</li>
+      <li><b>npm distribution intent</b>&nbsp;— decides whether B5 is a bug or a non-issue.</li>
+      <li><b>Real Backflipp price strings</b>&nbsp;that rely on the bare-number fallback — capture a live sample before changing B4.</li>
+      <li><b>Does Gemini actually return multi-ingredient assignments</b>&nbsp;for one item in practice? B2's blast radius depends on it.</li>
+      <li><b>Is the unused <code>geminiMeals</code> review queue</b>&nbsp;planned or abandoned? Decides D1's disposition.</li>
+      <li><b>Is "vegan" a supported promise</b>&nbsp;or best-effort free text? Shapes how thorough B3 needs to be.</li>
+    </ul>
+  </div>
+
+  <footer>
+    <span>PantryDeal audit · read-only · no files changed</span>
+    <span>214 tests ✓ · tsc ✓ · eslint ✓ · generated 2026-06-09</span>
+  </footer>
+
+</div>
+
+<script>
+  // Severity filter
+  const chips = document.querySelectorAll('.chip');
+  const sevMap = { critical: ['critical'], high: ['high'], med: ['med'], low: ['low'] };
+  function apply() {
+    const on = {};
+    chips.forEach(c => on[c.dataset.sev] = c.dataset.on === 'true');
+    document.querySelectorAll('.card[data-sev]').forEach(card => {
+      card.classList.toggle('hidden', !on[card.dataset.sev]);
+    });
+    // hide a section if all its cards are hidden
+    document.querySelectorAll('.section-head').forEach(head => {
+      let grid = head.nextElementSibling;
+      if (!grid || !grid.classList.contains('grid')) return;
+      const any = [...grid.querySelectorAll('.card[data-sev]')].some(c => !c.classList.contains('hidden'));
+      head.classList.toggle('hidden', !any);
+      grid.classList.toggle('hidden', !any);
+    });
+  }
+  chips.forEach(c => c.addEventListener('click', () => {
+    c.dataset.on = c.dataset.on === 'true' ? 'false' : 'true';
+    apply();
+  }));
+</script>
+</body>
+</html>

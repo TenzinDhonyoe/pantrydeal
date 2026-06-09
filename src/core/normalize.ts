@@ -76,10 +76,25 @@ export function parseSizeToGrams(size: string | undefined): number | null {
   return null;
 }
 
+/**
+ * Promotional marketing words that, on a string with NO dollar amount, mean the
+ * first bare number is a campaign detail ("save 3", "3 days only", "buy 2 get 1")
+ * rather than a price. Whole-word, case-insensitive. Kept deliberately narrow so
+ * legit bare prices ("1.29 ea", "0.99 each") still parse.
+ */
+const PROMO_WORDS = [
+  'save', 'off', 'free', 'days', 'day only', 'buy', 'get', 'win', 'bonus', 'points', 'spend', 'earn',
+];
+
 /** Pull the first dollar amount out of a string, e.g. "$8.99 family pack" -> 8.99. */
 function firstDollarAmount(s: string): number | null {
   const m = s.match(/\$\s*(\d+(?:\.\d+)?)/);
   if (m) return Number(m[1]);
+  // Guard the bare-number fallback: a promo string with no "$" (e.g. "save 3",
+  // "3 days only") is not a price — its first number would corrupt ranking.
+  if (PROMO_WORDS.some((w) => new RegExp(`(^|[^a-z])${w}([^a-z]|$)`, 'i').test(s))) {
+    return null;
+  }
   // bare number fallback, e.g. "1.29 ea"
   const bare = s.match(/(\d+(?:\.\d+)?)/);
   return bare ? Number(bare[1]) : null;

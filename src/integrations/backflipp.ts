@@ -25,6 +25,27 @@ import type {
 
 const SEARCH_URL = 'https://backflipp.wishabi.com/flipp/items/search';
 
+/** How many term searches run at once (P1). The week-planner passes 40+ terms;
+ * sequential round-trips made that pathologically slow. */
+const TERM_CONCURRENCY = 6;
+/** Per-term request timeout (P2): a hung upstream can't stall the whole batch. */
+const FETCH_TIMEOUT_MS = 8000;
+
+/** Run async tasks with bounded concurrency over a shared index (worker pool). */
+async function mapPool<T, R>(items: T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]!, i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
 /** Broad fallback search terms when none are supplied. */
 const DEFAULT_TERMS = [
   'chicken',
@@ -120,25 +141,64 @@ export class BackflippClient implements FlyerClient {
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
+  /** Fetch one term's items. Returns the items array on success, or null on any
+   * failure (non-ok / network / timeout) so the caller can skip it (P1, P2). */
+  private async fetchTerm(term: string, fullPostal: string): Promise<BackflippItem[] | null> {
+    const url =
+      `${SEARCH_URL}?locale=${encodeURIComponent(this.locale)}` +
+      `&postal_code=${encodeURIComponent(fullPostal)}&q=${encodeURIComponent(term)}`;
+    // AbortController-based timeout (P2); the signal is threaded through fetchImpl so
+    // the injection seam is preserved. clearTimeout in finally disarms the timer.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const res = await this.fetchImpl(url, {
+        headers: { accept: 'application/json' },
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        if (process.env.PANTRYDEAL_DEBUG) {
+          process.stderr.write(`[backflipp] term "${term}" failed (${res.status}) — skipping\n`);
+        }
+        return null;
+      }
+      const body = (await res.json()) as BackflippResponse;
+      return body.items ?? [];
+    } catch {
+      if (process.env.PANTRYDEAL_DEBUG) {
+        const reason = controller.signal.aborted ? 'timed out' : 'errored';
+        process.stderr.write(`[backflipp] term "${term}" ${reason} — skipping\n`);
+      }
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async getDeals(postal: string): Promise<FlyerData> {
     const origin: LatLng = await this.geocoder.geocodePostal(postal);
     const fullPostal = toFullPostal(postal);
+
+    // Fetch terms with bounded concurrency (P1). Per-term failures are non-fatal:
+    // fetchTerm returns null and we skip it. Ordering is now nondeterministic, but
+    // dedup keys off Maps/Sets so it stays correct.
+    const perTerm = await mapPool(this.terms, TERM_CONCURRENCY, (term) =>
+      this.fetchTerm(term, fullPostal),
+    );
+
+    // If EVERY term failed, the source is down — surface it rather than silently
+    // returning an empty flyer (which would read as "no deals", a wrong answer).
+    if (perTerm.every((r) => r === null)) {
+      throw new Error('Backflipp request failed for all search terms (source unreachable).');
+    }
 
     const storesById = new Map<string, Store>();
     const items: FlyerItem[] = [];
     const seenItemIds = new Set<string>();
 
-    for (const term of this.terms) {
-      const url =
-        `${SEARCH_URL}?locale=${encodeURIComponent(this.locale)}` +
-        `&postal_code=${encodeURIComponent(fullPostal)}&q=${encodeURIComponent(term)}`;
-      const res = await this.fetchImpl(url, { headers: { accept: 'application/json' } });
-      if (!res.ok) {
-        throw new Error(`Backflipp request failed (${res.status}) for term "${term}"`);
-      }
-      const body = (await res.json()) as BackflippResponse;
-
-      for (const raw of body.items ?? []) {
+    for (const termItems of perTerm) {
+      if (!termItems) continue; // skipped (failed) term
+      for (const raw of termItems) {
         if (!raw.name || !raw.merchant_name) continue;
         const itemId = String(raw.flyer_item_id ?? `${raw.merchant_id}:${raw.name}`);
         if (seenItemIds.has(itemId)) continue;

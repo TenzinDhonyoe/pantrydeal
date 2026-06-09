@@ -56,12 +56,18 @@ export interface ParsedRecipe {
 function isPrivateIPv4(ip: string): boolean {
   const p = ip.split('.').map(Number);
   if (p.length !== 4 || p.some((n) => Number.isNaN(n))) return true; // be conservative
-  const [a, b] = p as [number, number, number, number];
+  const [a, b, c] = p as [number, number, number, number];
   if (a === 10 || a === 127 || a === 0) return true;
   if (a === 169 && b === 254) return true; // link-local + cloud metadata (169.254.169.254)
   if (a === 172 && b >= 16 && b <= 31) return true;
   if (a === 192 && b === 168) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true; // carrier-grade NAT
+  if (a === 100 && b >= 64 && b <= 127) return true; // carrier-grade NAT (100.64.0.0/10)
+  if (a === 198 && (b === 18 || b === 19)) return true; // benchmarking (198.18.0.0/15)
+  if (a === 192 && b === 0) return true; // IETF protocol assignments (192.0.0.0/24) — covers TEST-NET-1 192.0.2.0/24
+  if (a === 198 && b === 51 && c === 100) return true; // TEST-NET-2 (198.51.100.0/24)
+  if (a === 203 && b === 0 && c === 113) return true; // TEST-NET-3 (203.0.113.0/24)
+  if (a >= 224 && a <= 239) return true; // multicast (224.0.0.0/4)
+  if (a >= 240) return true; // reserved (240.0.0.0/4) + 255.255.255.255 broadcast
   return false;
 }
 

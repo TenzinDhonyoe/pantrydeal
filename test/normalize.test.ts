@@ -87,4 +87,22 @@ describe('normalizePrice branches', () => {
     expect(normalizePrice('2/$5')).toBeNull(); // multi-buy needs size
     expect(normalizePrice('BOGO free', 'each')).toBeNull();
   });
+
+  it('does not price promotional marketing strings with no dollar amount', () => {
+    // "save 3" / "3 days only" must not parse the bare number as a price.
+    expect(normalizePrice('save 3', '500 g')).toBeNull();
+    expect(normalizePrice('3 days only', '500 g')).toBeNull();
+    expect(normalizePrice('buy 2 get 1', '500 g')).toBeNull();
+    expect(normalizePrice('spend 30 earn 10 points', '500 g')).toBeNull();
+  });
+
+  it('still prices legit bare prices and $-amounts after the promo guard', () => {
+    const bare = normalizePrice('1.29 ea', '200 g');
+    expect(bare?.pricePerGram).toBeCloseTo(1.29 / 200, 8);
+    const each = normalizePrice('0.99 each', '100 g');
+    expect(each?.pricePerGram).toBeCloseTo(0.99 / 100, 8);
+    // A "$" amount is never guarded, even alongside promo words.
+    const fam = normalizePrice('$8.99 family pack', '1.5 kg');
+    expect(fam?.pricePerGram).toBeCloseTo(8.99 / 1500, 8);
+  });
 });

@@ -65,7 +65,11 @@ export interface ShoppingPlan {
 }
 
 export interface OptimizeOptions {
-  /** Max stores in a plan (1 or 2). Default 2. */
+  /**
+   * Max stores in a plan. Default 2. Only 1 and 2 are meaningful: any value >= 2
+   * is capped at 2 — we enumerate single stores plus the best pair only, never
+   * three-store splits.
+   */
   maxStores?: number;
   /** Only suggest a second store when it saves at least this many dollars. Default 5. */
   worthItBar?: number;
@@ -199,6 +203,9 @@ export function optimizePlan(
   }
   best = bestSingle;
   if (maxStores >= 2) {
+    // Brute-force every store pair: O(stores^2) candidates, each costing O(ingredients)
+    // to assign. Fine at flyer scale (~20 merchants); would need pruning if the store
+    // count ever grew large. maxStores caps us at pairs — no three-store enumeration.
     for (let i = 0; i < storeIds.length; i += 1) {
       for (let j = i + 1; j < storeIds.length; j += 1) {
         const cand = evaluate([storeIds[i]!, storeIds[j]!]);

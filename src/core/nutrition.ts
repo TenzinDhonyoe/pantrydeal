@@ -129,10 +129,33 @@ export function nutritionForMatched(
   return { nutrition: computed.nutrition, matched: matched.length, total: ingredients.length, missing };
 }
 
-/** Is this ingredient name on the high-glycemic / added-sugar blocklist? */
+/**
+ * Compounds that contain a blocklist word but are clinically benign and must
+ * never be blocked: sugar-snap / snap peas are a green vegetable (not the
+ * sweetener "sugar"), and lemon/lime juice is an acidifier used in drops, not a
+ * sugary fruit juice. Without these, whole-word matching of "sugar"/"juice"
+ * would still wrongly gate them (the word "sugar" is present in "sugar snap
+ * peas", "juice" in "lemon juice"). Mirrors swaps.ts:NEVER_SWAP.
+ */
+const NEVER_BLOCK = [/\bsugar snap/, /\bsnap pea/, /\blemon juice/, /\blime juice/];
+
+/** Match a blocklist entry only as a whole word/phrase, not a substring. */
+function matchesBlock(name: string, key: string): boolean {
+  return new RegExp(`(^|[^a-z])${key}([^a-z]|$)`, 'i').test(name);
+}
+
+/**
+ * Is this ingredient name on the high-glycemic / added-sugar blocklist? Each entry
+ * is matched as a whole word/phrase with word boundaries (same approach as
+ * swaps.ts:matchesKey), NOT a substring — so "sugar" blocks "white sugar" but the
+ * NEVER_BLOCK exceptions keep clinically benign compounds like "sugar snap peas"
+ * and "lemon juice" off the gate. Multi-word entries like "white bread" still
+ * match as a phrase.
+ */
 export function isBlocked(name: string, blocklist: string[] = HIGH_GI_BLOCKLIST): boolean {
   const n = name.toLowerCase();
-  return blocklist.some((b) => n.includes(b));
+  if (NEVER_BLOCK.some((re) => re.test(n))) return false;
+  return blocklist.some((b) => matchesBlock(n, b));
 }
 
 /** Check per-serving macros against the targets. */

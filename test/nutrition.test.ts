@@ -105,6 +105,18 @@ describe('isBlocked', () => {
     expect(isBlocked('brown rice')).toBe(false);
     expect(isBlocked('lentils')).toBe(false);
   });
+
+  it('matches blocklist entries as whole words, not substrings', () => {
+    // False positives the substring match used to flag.
+    expect(isBlocked('sugar snap peas')).toBe(false);
+    expect(isBlocked('snap peas')).toBe(false);
+    expect(isBlocked('lemon juice')).toBe(false);
+    // Real blocklist hits still caught.
+    expect(isBlocked('sugar')).toBe(true);
+    expect(isBlocked('white sugar')).toBe(true);
+    expect(isBlocked('apple juice')).toBe(true);
+    expect(isBlocked('white bread')).toBe(true);
+  });
 });
 
 describe('validateRecipe', () => {

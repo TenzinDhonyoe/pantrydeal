@@ -202,7 +202,59 @@ export async function priceRecipeFromSource(req: RecipeSourceRequest): Promise<R
 // ---------------------------------------------------------------------------
 
 const DEFAULT_RADIUS_KM = 25;
-const MEAT = ['chicken', 'turkey', 'salmon', 'beef', 'pork', 'fish', 'shrimp'];
+
+// Diet exclusion sets for recipeAllowed (B3). Matched case-insensitively as whole
+// tokens against ingredient names (see `hasTerm`), so "egg" excludes "egg" but NOT
+// "eggplant" (eggplant is vegan), and "fish" doesn't fire on unrelated substrings.
+//
+// MEAT_FISH: animal flesh — excluded for BOTH vegetarian and vegan. Covers the
+// common terms plus everything that appears in src/core/recipeLibrary.ts and
+// recipeBook.ts (chicken, turkey, beef, salmon, shrimp live there today).
+const MEAT_FISH = [
+  'chicken',
+  'turkey',
+  'beef',
+  'pork',
+  'lamb',
+  'ham',
+  'bacon',
+  'salmon',
+  'fish',
+  'shrimp',
+  'tuna',
+  'cod',
+  'sausage',
+  'prosciutto',
+];
+
+// ANIMAL_PRODUCE: dairy, eggs and other animal by-products — excluded for vegan
+// ONLY (vegetarians keep these). NOTE: a bare "milk" token would also exclude
+// plant milks like "coconut milk" / "almond milk"; the recipe library currently
+// has no such plant-milk ingredient, so whole-word "milk" is safe here. If a
+// plant milk is ever added, give it a distinct name or special-case it.
+const ANIMAL_PRODUCE = [
+  'milk',
+  'cream',
+  'butter',
+  'cheese',
+  'parmesan',
+  'yogurt',
+  'egg',
+  'honey',
+  'ghee',
+  'whey',
+];
+
+/**
+ * Whole-word (token) containment: true when `term` appears in `text` as a word,
+ * not merely as a substring. Guards false positives like "egg" → "eggplant" or
+ * "ham" → "graham". Words are delimited by anything that is not a lowercase
+ * letter, so multi-word ingredient names ("cottage cheese") still match on
+ * "cheese". Both inputs are lowercased by the caller.
+ */
+function hasTerm(text: string, term: string): boolean {
+  return new RegExp(`(^|[^a-z])${term}([^a-z]|$)`).test(text);
+}
 
 export interface WeekRequest {
   postal: string;
@@ -229,13 +281,27 @@ export interface WeekResult {
   meals: MealPricing[];
 }
 
-/** A recipe is allowed only if it violates none of the patient's restrictions. */
-function recipeAllowed(recipe: Recipe, restrictions: string[]): boolean {
+/**
+ * A recipe is allowed only if it violates none of the patient's restrictions.
+ *
+ * Diet handling (B3): "vegetarian" excludes only meat/fish; "vegan" additionally
+ * excludes dairy, eggs, honey and other animal by-products. Both use whole-word
+ * matching (see `hasTerm`) so "egg" never excludes "eggplant". Any other
+ * restriction string falls back to the original substring behaviour (e.g. an
+ * allergy like "peanut" excludes any ingredient whose name contains it).
+ *
+ * Exported so it can be unit-tested directly; it is a pure function.
+ */
+export function recipeAllowed(recipe: Recipe, restrictions: string[]): boolean {
   return restrictions.every((raw) => {
     const r = raw.trim().toLowerCase();
     if (!r) return true;
     if (r === 'vegetarian' || r === 'vegan') {
-      return !recipe.ingredients.some((i) => MEAT.includes(i.name.toLowerCase()));
+      const banned = r === 'vegan' ? [...MEAT_FISH, ...ANIMAL_PRODUCE] : MEAT_FISH;
+      return !recipe.ingredients.some((i) => {
+        const name = i.name.toLowerCase();
+        return banned.some((term) => hasTerm(name, term));
+      });
     }
     return !recipe.ingredients.some((i) => i.name.toLowerCase().includes(r));
   });

@@ -7,6 +7,8 @@
 import type { Geocoder, LatLng } from '../core/types.js';
 
 const BASE_URL = 'https://api.zippopotam.us';
+/** Geocoding round-trip cap (P2): a hung upstream can't stall the pipeline. */
+const FETCH_TIMEOUT_MS = 8000;
 
 interface ZippopotamPlace {
   latitude: string;
@@ -37,7 +39,24 @@ export class ZippopotamGeocoder implements Geocoder {
         ? postal.replace(/\s+/g, '').slice(0, 3).toUpperCase()
         : postal.replace(/\s+/g, '');
     const url = `${BASE_URL}/${this.country}/${encodeURIComponent(key)}`;
-    const res = await this.fetchImpl(url, { headers: { accept: 'application/json' } });
+    // AbortController-based timeout (P2); the signal is threaded through fetchImpl so
+    // the injection seam is preserved. clearTimeout in finally disarms the timer.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, {
+        headers: { accept: 'application/json' },
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new Error(`Zippopotam geocoding timed out after ${FETCH_TIMEOUT_MS}ms for "${postal}"`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
     if (!res.ok) {
       throw new Error(`Zippopotam geocoding failed (${res.status}) for "${postal}"`);
     }

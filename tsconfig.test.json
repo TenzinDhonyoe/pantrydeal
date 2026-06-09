@@ -1,0 +1,14 @@
+{
+  // Type-checks the test suite, which the main tsconfig deliberately excludes
+  // (rootDir = src, declaration output). vitest runs tests untyped, so without
+  // this a type error in a test would go unseen. Wired into `npm run typecheck`.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "declaration": false,
+    "types": ["node"]
+  },
+  "include": ["src/**/*", "test/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
