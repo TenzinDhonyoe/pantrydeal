@@ -40,6 +40,9 @@ import { recordUsage, type WithUsage } from './geminiUsage.js';
 const DEFAULT_MODEL = 'gemini-3.5-flash';
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 const CONCURRENCY = 5;
+/** LLM calls are slower than plain REST; give them a generous ceiling so a hung
+ * upstream still can't hang the whole pipeline forever (D11 / P2). */
+const FETCH_TIMEOUT_MS = 30_000;
 
 /**
  * Process-lifetime classification cache (option D), shared across requests. Keyed by
@@ -213,15 +216,31 @@ export class GeminiAnalyzer {
     responseSchema: unknown,
   ): Promise<string> {
     const url = `${BASE_URL}/${this.model}:generateContent`;
-    const res = await this.fetchImpl(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-goog-api-key': this.apiKey },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemInstruction }] },
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: 'application/json', responseSchema, temperature: 0 },
-      }),
-    });
+    // AbortController-based timeout (P2): a hung upstream would otherwise stall the
+    // request forever. The signal is threaded through fetchImpl so the test seam is
+    // preserved. clearTimeout runs in finally so a fast response disarms the timer.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': this.apiKey },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: 'application/json', responseSchema, temperature: 0 },
+        }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new Error(`Gemini analysis timed out for ${label} after ${FETCH_TIMEOUT_MS}ms.`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
       throw new Error(`Gemini analysis failed for ${label} (${res.status}). ${detail.slice(0, 200)}`);
@@ -301,18 +320,38 @@ export class GeminiAnalyzer {
     return perIngredient.flat();
   }
 
-  /** Apply accepted assignments onto a copy of the items, returning the assignment map. */
-  private applyAssignments(assignments: Assignment[], enriched: FlyerItem[]): Map<FlyerItem, string> {
-    const assignment = new Map<FlyerItem, string>();
+  /**
+   * Apply accepted assignments onto a copy of the items, returning the assignment
+   * map. One flyer item can legitimately satisfy MULTIPLE ingredients (buildBatchPlan
+   * lets, e.g., an onion listing be a candidate for both "onion" and "green onion"),
+   * so we accumulate a SET of ingredient names per item rather than overwriting (B2)
+   * — a plain `Map<FlyerItem,string>` silently dropped the first ingredient when the
+   * LLM assigned the same item twice. The item's price/size, by contrast, is a
+   * property of the ITEM (not the ingredient), so we write it once and keep the FIRST
+   * valid price; a later assignment must not clobber an already-priced item.
+   */
+  private applyAssignments(assignments: Assignment[], enriched: FlyerItem[]): Map<FlyerItem, Set<string>> {
+    const assignment = new Map<FlyerItem, Set<string>>();
+    const priced = new Set<FlyerItem>();
     for (const a of assignments) {
       if (a.unitPriceDollars > 0 && a.quantityGrams > 0) {
         const item = enriched[a.itemIndex]!;
         if (process.env.PANTRYDEAL_DEBUG) {
           process.stderr.write(`[match] ${a.ingredientName} <- "${item.name}" ($${a.unitPriceDollars}/${a.quantityGrams}g)\n`);
         }
-        item.rawPrice = `$${a.unitPriceDollars}`;
-        item.size = `${a.quantityGrams} g`;
-        assignment.set(item, a.ingredientName.toLowerCase());
+        // Price is a stable property of the item: set it once, keep the first.
+        if (!priced.has(item)) {
+          item.rawPrice = `$${a.unitPriceDollars}`;
+          item.size = `${a.quantityGrams} g`;
+          priced.add(item);
+        }
+        // Accumulate every ingredient this item satisfies (don't overwrite).
+        let names = assignment.get(item);
+        if (!names) {
+          names = new Set<string>();
+          assignment.set(item, names);
+        }
+        names.add(a.ingredientName.toLowerCase());
       }
     }
     return assignment;
@@ -422,7 +461,7 @@ export class GeminiAnalyzer {
     const assignment = this.applyAssignments(assignments, enriched);
     const matcher: CandidateMatcher = {
       matches: (ingredient: Ingredient, item: FlyerItem): boolean =>
-        assignment.get(item) === ingredient.name.toLowerCase(),
+        assignment.get(item)?.has(ingredient.name.toLowerCase()) === true,
     };
     return { items: enriched, matcher };
   }

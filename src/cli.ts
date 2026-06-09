@@ -9,6 +9,7 @@
  * the unofficial Backflipp flyer endpoint (keyless), keyless Zippopotam
  * geocoding, and Gemini recipe parsing (reads GEMINI_API_KEY from the env).
  */
+import { pathToFileURL } from 'node:url';
 import { NoRecipeError, type Match, type PipelineResult } from './core/index.js';
 import { search } from './runner.js';
 
@@ -22,7 +23,8 @@ interface CliArgs {
   help: boolean;
 }
 
-function parseArgs(argv: string[]): CliArgs {
+// Exported so it can be unit-tested directly; it is a pure function.
+export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = { live: Boolean(process.env.PANTRYDEAL_LIVE), help: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -42,9 +44,16 @@ function parseArgs(argv: string[]): CliArgs {
         args.people = n;
         break;
       }
-      case '--radius':
-        args.radiusKm = Number(argv[++i]);
+      case '--radius': {
+        // Validate like --people so "--radius abc" fails loudly instead of
+        // producing NaN, which would silently filter out every store (B6).
+        const n = Number(argv[++i]);
+        if (!Number.isFinite(n) || n <= 0) {
+          throw new Error('--radius must be a positive number.');
+        }
+        args.radiusKm = n;
         break;
+      }
       case '--fixture':
         args.fixture = argv[++i];
         break;
@@ -203,9 +212,17 @@ async function main(): Promise<number> {
   }
 }
 
-main()
-  .then((code) => process.exit(code))
-  .catch((err) => {
-    process.stderr.write(`Fatal: ${(err as Error).message}\n`);
-    process.exit(1);
-  });
+// Only run when executed directly (`npm run cli` / `node dist/cli.js`), not when
+// imported by tests. Under tsx and node ESM, the entry module's URL equals
+// `file://<argv[1]>`; importing this file from a test makes the two differ.
+const entry = process.argv[1];
+const isEntrypoint = entry != null && import.meta.url === pathToFileURL(entry).href;
+
+if (isEntrypoint) {
+  main()
+    .then((code) => process.exit(code))
+    .catch((err) => {
+      process.stderr.write(`Fatal: ${(err as Error).message}\n`);
+      process.exit(1);
+    });
+}

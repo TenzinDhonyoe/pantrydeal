@@ -10,6 +10,8 @@ import { recordUsage, type WithUsage } from './geminiUsage.js';
 
 const DEFAULT_MODEL = 'gemini-3.5-flash';
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+/** LLM calls are slow; cap them so a hung upstream can't stall forever (P2). */
+const FETCH_TIMEOUT_MS = 30_000;
 
 const CATEGORIES: Category[] = [
   'protein',
@@ -90,22 +92,37 @@ export class GeminiRecipeParser implements RecipeParser {
     const ask = servings
       ? `${dinner}\n\nScale every ingredient quantity for exactly ${servings} servings.`
       : dinner;
-    const res = await this.fetchImpl(url, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-goog-api-key': this.apiKey,
-      },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
-        contents: [{ role: 'user', parts: [{ text: ask }] }],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          responseSchema: RESPONSE_SCHEMA,
-          temperature: 0,
+    // AbortController-based timeout (P2); the signal is threaded through fetchImpl
+    // so the test injection seam is preserved. clearTimeout in finally disarms it.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-goog-api-key': this.apiKey,
         },
-      }),
-    });
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
+          contents: [{ role: 'user', parts: [{ text: ask }] }],
+          generationConfig: {
+            responseMimeType: 'application/json',
+            responseSchema: RESPONSE_SCHEMA,
+            temperature: 0,
+          },
+        }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new Error(`Gemini request timed out after ${FETCH_TIMEOUT_MS}ms.`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
       throw new Error(`Gemini request failed (${res.status}). ${detail.slice(0, 300)}`);
@@ -120,11 +137,21 @@ export class GeminiRecipeParser implements RecipeParser {
       throw new Error('Gemini returned an empty response.');
     }
     const recipe = JSON.parse(text) as Recipe;
-    // Defensive normalization: ensure required arrays exist.
-    recipe.ingredients = (recipe.ingredients ?? []).map((i) => ({
-      ...i,
-      substitutes: Array.isArray(i.substitutes) ? i.substitutes : [],
-    }));
+    // Defensive sanitization (B7): a malformed LLM response could otherwise inject
+    // empty-named or zero/NaN-gram ingredients that produce NaN line costs in
+    // ranking. Mirror recipeUrl.ts: normalize the name, coerce grams to a finite
+    // number, guard the category, lowercase substitutes, then drop unusable rows.
+    recipe.ingredients = (recipe.ingredients ?? [])
+      .map((i) => ({
+        name: String(i.name ?? '').trim().toLowerCase(), // canonical table key
+        qtyGrams: Number(i.qtyGrams) || 0,
+        category: (CATEGORIES.includes(i.category) ? i.category : 'other') as Category,
+        substitutes: Array.isArray(i.substitutes) ? i.substitutes.map((s) => String(s).toLowerCase()) : [],
+      }))
+      .filter((i) => i.name && i.qtyGrams > 0);
+    if (recipe.ingredients.length === 0) {
+      throw new Error('Gemini returned a recipe with no usable ingredients.');
+    }
     return recipe;
   }
 }

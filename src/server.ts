@@ -11,8 +11,8 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
-import { dirname, extname, join, normalize } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { dirname, extname, join, normalize, sep } from 'node:path';
 import {
   NoRecipeError,
   optimizePlan,
@@ -37,6 +37,41 @@ import {
 const PORT = Number(process.env.PORT ?? 3000);
 const WEB_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 
+/** Hard cap on request bodies (S3): JSON API payloads are tiny, so 64 KiB is plenty. */
+const MAX_BODY_BYTES = 64 * 1024; // 65536
+
+/**
+ * Best-effort, per-process in-memory rate limit (S4). Keyed by client IP, this
+ * is a fixed-window guard intended for the localhost / single-instance posture
+ * — it is NOT a substitute for a real edge limiter behind a load balancer.
+ * Applied only to the live POST /api/* endpoints (which can burn API credits),
+ * never to static files or /api/config.
+ */
+const RATE_LIMIT_MAX = 30; // requests …
+const RATE_LIMIT_WINDOW_MS = 60_000; // … per 60s window, per IP
+const rateHits = new Map<string, number[]>();
+
+/** Sentinel thrown by readBody when a request body exceeds MAX_BODY_BYTES (S3). */
+export class PayloadTooLargeError extends Error {
+  override readonly name = 'PayloadTooLargeError';
+  constructor() {
+    super('Request body too large.');
+  }
+}
+
+/**
+ * Record a hit for `ip` and report whether it is now over the limit. Old
+ * timestamps outside the window are pruned on each call so the map stays small.
+ * Returns true when the request should be allowed, false when it must be 429'd.
+ */
+export function rateLimitAllow(ip: string, now: number = Date.now()): boolean {
+  const cutoff = now - RATE_LIMIT_WINDOW_MS;
+  const recent = (rateHits.get(ip) ?? []).filter((t) => t > cutoff);
+  recent.push(now);
+  rateHits.set(ip, recent);
+  return recent.length <= RATE_LIMIT_MAX;
+}
+
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -51,10 +86,35 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(payload);
 }
 
-async function readBody(req: IncomingMessage): Promise<string> {
+/**
+ * Buffer the request body, capped at MAX_BODY_BYTES (S3). We accumulate chunk
+ * lengths as we go and bail the moment the running total exceeds the cap —
+ * destroying the stream so we stop consuming — by throwing PayloadTooLargeError.
+ * Handlers translate that sentinel into an HTTP 413.
+ */
+export async function readBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
+  let total = 0;
+  for await (const chunk of req) {
+    const buf = chunk as Buffer;
+    total += buf.length;
+    if (total > MAX_BODY_BYTES) {
+      // Stop consuming the stream and signal "too large" to the caller.
+      req.destroy();
+      throw new PayloadTooLargeError();
+    }
+    chunks.push(buf);
+  }
   return Buffer.concat(chunks).toString('utf8');
+}
+
+/** Shared catch translation for the body-read step: 413 over-cap, else 400 bad JSON. */
+function sendBodyError(res: ServerResponse, err: unknown): void {
+  if (err instanceof PayloadTooLargeError) {
+    sendJson(res, 413, { error: 'Request body too large.' });
+    return;
+  }
+  sendJson(res, 400, { error: 'Invalid JSON body.' });
 }
 
 /** Shape one plan item for the UI. */
@@ -223,12 +283,12 @@ function toWeekResponse(result: WeekResult, postal: string, people: number) {
   };
 }
 
-async function handlePlanWeek(req: IncomingMessage, res: ServerResponse): Promise<void> {
+export async function handlePlanWeek(req: IncomingMessage, res: ServerResponse): Promise<void> {
   let body: { postal?: string; people?: number; budget?: number; days?: number; live?: boolean; restrictions?: string[]; exclude?: string[] };
   try {
     body = JSON.parse((await readBody(req)) || '{}');
-  } catch {
-    return sendJson(res, 400, { error: 'Invalid JSON body.' });
+  } catch (err) {
+    return sendBodyError(res, err);
   }
   const postal = (body.postal ?? '').trim();
   const budget = Number(body.budget);
@@ -255,16 +315,20 @@ async function handlePlanWeek(req: IncomingMessage, res: ServerResponse): Promis
     });
     sendJson(res, 200, toWeekResponse(result, postal, people ?? 4));
   } catch (err) {
-    sendJson(res, 500, { error: (err as Error).message });
+    // S2: log the real cause server-side, return a generic message so vendor /
+    // upstream error bodies (e.g. Gemini error text) never leak to the client.
+    const e = err instanceof Error ? err : new Error(String(err));
+    process.stderr.write(`[plan-week] unhandled error: ${e.stack ?? e.message}\n`);
+    sendJson(res, 500, { error: 'Something went wrong planning that week. Please try again.' });
   }
 }
 
-async function handleSearch(req: IncomingMessage, res: ServerResponse): Promise<void> {
+export async function handleSearch(req: IncomingMessage, res: ServerResponse): Promise<void> {
   let body: { postal?: string; dinner?: string; people?: number; live?: boolean };
   try {
     body = JSON.parse((await readBody(req)) || '{}');
-  } catch {
-    return sendJson(res, 400, { error: 'Invalid JSON body.' });
+  } catch (err) {
+    return sendBodyError(res, err);
   }
 
   const postal = (body.postal ?? '').trim();
@@ -287,17 +351,24 @@ async function handleSearch(req: IncomingMessage, res: ServerResponse): Promise<
     const result = await search({ postal, dinner, people, live });
     sendJson(res, 200, toResponse(result, postal));
   } catch (err) {
-    const message = err instanceof NoRecipeError ? err.message : (err as Error).message;
-    sendJson(res, err instanceof NoRecipeError ? 422 : 500, { error: message });
+    // NoRecipeError is a safe, user-facing domain error → 422 with its message.
+    if (err instanceof NoRecipeError) {
+      return sendJson(res, 422, { error: err.message });
+    }
+    // S2: any other failure → log the real cause server-side, return a generic
+    // message so vendor / upstream error bodies never leak to the client.
+    const e = err instanceof Error ? err : new Error(String(err));
+    process.stderr.write(`[search] unhandled error: ${e.stack ?? e.message}\n`);
+    sendJson(res, 500, { error: 'Something went wrong running that search. Please try again.' });
   }
 }
 
-async function handleRecipe(req: IncomingMessage, res: ServerResponse): Promise<void> {
+export async function handleRecipe(req: IncomingMessage, res: ServerResponse): Promise<void> {
   let body: { postal?: string; url?: string; text?: string; people?: number };
   try {
     body = JSON.parse((await readBody(req)) || '{}');
-  } catch {
-    return sendJson(res, 400, { error: 'Invalid JSON body.' });
+  } catch (err) {
+    return sendBodyError(res, err);
   }
 
   const postal = (body.postal ?? '').trim();
@@ -341,11 +412,14 @@ async function handleRecipe(req: IncomingMessage, res: ServerResponse): Promise<
   }
 }
 
-async function serveStatic(req: IncomingMessage, res: ServerResponse): Promise<void> {
+export async function serveStatic(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const urlPath = (req.url ?? '/').split('?')[0]!;
   const rel = urlPath === '/' ? 'index.html' : normalize(urlPath).replace(/^(\.\.[/\\])+/, '').replace(/^[/\\]+/, '');
   const filePath = join(WEB_DIR, rel);
-  if (!filePath.startsWith(WEB_DIR)) {
+  // S5: require the resolved path to be WEB_DIR itself or strictly under it
+  // (WEB_DIR + path separator). A bare startsWith(WEB_DIR) would also accept a
+  // sibling like "<WEB_DIR>-secret"; the trailing `sep` closes that bypass.
+  if (filePath !== WEB_DIR && !filePath.startsWith(WEB_DIR + sep)) {
     res.writeHead(403).end('Forbidden');
     return;
   }
@@ -358,8 +432,25 @@ async function serveStatic(req: IncomingMessage, res: ServerResponse): Promise<v
   }
 }
 
-const server = createServer((req, res) => {
+/**
+ * Top-level request handler. Exported so tests can drive it with fake
+ * IncomingMessage / ServerResponse objects without binding a port.
+ */
+export function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   const url = (req.url ?? '/').split('?')[0];
+  // S4: throttle the three live POST /api/* endpoints (those that can burn API
+  // credits) per client IP. Static files and /api/config are deliberately exempt.
+  if (req.method === 'POST' && (url === '/api/search' || url === '/api/plan-week' || url === '/api/recipe')) {
+    const ip = req.socket?.remoteAddress ?? 'unknown';
+    if (!rateLimitAllow(ip)) {
+      res.writeHead(429, {
+        'content-type': 'application/json; charset=utf-8',
+        'retry-after': String(Math.ceil(RATE_LIMIT_WINDOW_MS / 1000)),
+      });
+      res.end(JSON.stringify({ error: 'Too many requests. Please slow down.' }));
+      return;
+    }
+  }
   if (req.method === 'POST' && url === '/api/search') {
     void handleSearch(req, res);
     return;
@@ -381,10 +472,16 @@ const server = createServer((req, res) => {
     return;
   }
   res.writeHead(405, { 'content-type': 'text/plain' }).end('Method not allowed');
-});
+}
 
-server.listen(PORT, () => {
-  process.stdout.write(
-    `PantryDeal web UI running at http://localhost:${PORT}  (live mode ${liveAvailable() ? 'available' : 'disabled — set GEMINI_API_KEY'})\n`,
-  );
-});
+const server = createServer(handleRequest);
+
+// Only bind a port when run as the entry point (npm run serve / node dist/server.js).
+// Importing this module (e.g. from tests) must NOT start listening.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  server.listen(PORT, () => {
+    process.stdout.write(
+      `PantryDeal web UI running at http://localhost:${PORT}  (live mode ${liveAvailable() ? 'available' : 'disabled — set GEMINI_API_KEY'})\n`,
+    );
+  });
+}
