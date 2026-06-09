@@ -6,6 +6,7 @@
  */
 import { Readable } from 'node:stream';
 import { join, sep } from 'node:path';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock the runner so handlers never touch the network; individual tests set the
@@ -34,39 +35,51 @@ function fakeReq(opts: {
   url?: string;
   body?: string | Buffer;
   ip?: string;
-}): any {
+}): IncomingMessage {
   const buf = opts.body == null ? Buffer.alloc(0) : Buffer.from(opts.body);
-  const stream = Readable.from([buf]) as any;
+  const stream = Readable.from([buf]) as Readable & {
+    method?: string;
+    url?: string;
+    socket?: { remoteAddress?: string };
+  };
   stream.method = opts.method ?? 'POST';
   stream.url = opts.url ?? '/';
   stream.socket = { remoteAddress: opts.ip ?? '10.0.0.1' };
   // Handlers may call req.destroy(); Readable provides it natively.
-  return stream;
+  return stream as unknown as IncomingMessage;
 }
 
 /** A capturing ServerResponse: records status, headers, and the body string. */
-function fakeRes(): any {
-  return {
+type FakeRes = ServerResponse & {
+  statusCode: number;
+  headers: Record<string, unknown>;
+  body: string;
+  ended: boolean;
+};
+
+function fakeRes(): FakeRes {
+  const res = {
     statusCode: 0,
     headers: {} as Record<string, unknown>,
     body: '',
     ended: false,
     writeHead(status: number, headers?: Record<string, unknown>) {
-      this.statusCode = status;
-      if (headers) Object.assign(this.headers, headers);
-      return this;
+      res.statusCode = status;
+      if (headers) Object.assign(res.headers, headers);
+      return res;
     },
     end(payload?: string) {
-      if (payload != null) this.body += payload;
-      this.ended = true;
-      return this;
+      if (payload != null) res.body += payload;
+      res.ended = true;
+      return res;
     },
   };
+  return res as unknown as FakeRes;
 }
 
 /** Spin until the in-flight handler promise (if any) settles. */
 async function flush(p?: unknown) {
-  if (p && typeof (p as any).then === 'function') await p;
+  if (p && typeof (p as { then?: unknown }).then === 'function') await p;
   // let any trailing microtasks (sendJson inside catch) run
   await Promise.resolve();
 }
@@ -156,7 +169,7 @@ describe('S5 — static path-traversal guard', () => {
     // back inside WEB_DIR and 404s; the important contract is that an escape can
     // never reach a real file (no 200 with foreign content).
     const res = fakeRes();
-    await serveStatic(fakeReq({ method: 'GET', url: '/../../../../../../etc/passwd' }) as any, res);
+    await serveStatic(fakeReq({ method: 'GET', url: '/../../../../../../etc/passwd' }), res);
     expect([403, 404]).toContain(res.statusCode);
     expect(res.statusCode).not.toBe(200);
   });
