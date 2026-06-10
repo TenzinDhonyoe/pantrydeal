@@ -61,10 +61,16 @@
         " · need " + it.neededGrams + " g" +
         (it.leftoverGrams > 0 ? " · " + it.leftoverGrams + " g left" : "")
       : it.neededGrams + " g";
+    // Honest label: the cheapest match was a different cut/form than the recipe
+    // asked for (e.g. drumsticks for "chicken thighs"). Say so rather than imply
+    // it's the same item.
+    const cutWarn = it.differentForm
+      ? '<span class="cut-warn">⚠ different cut/form — you asked for ' + esc(it.requestedAs) + "</span>"
+      : "";
     return (
       '<div class="ing-row is-deal"><div class="ing-row__name">' + esc(it.ingredient) + "</div>" +
       '<div class="ing-row__deal"><span class="deal-tag">' + esc(tag) + '</span>' +
-      '<span class="elsewhere">' + esc(it.product) + shelf + "</span></div>" +
+      '<span class="elsewhere">' + esc(it.product) + shelf + "</span>" + cutWarn + "</div>" +
       '<div class="ing-row__price">' + money(it.realCost) + '<span class="est-note">' + detail + "</span></div></div>"
     );
   }
