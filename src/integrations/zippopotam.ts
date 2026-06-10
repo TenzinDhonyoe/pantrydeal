@@ -23,6 +23,18 @@ export interface ZippopotamOptions {
   fetchImpl?: typeof fetch;
 }
 
+/**
+ * Thrown when the postal code itself is wrong (404 / no places) — a user-fixable
+ * error, unlike upstream 5xxs. The server matches on `err.name` and forwards
+ * `err.message` verbatim, so both are part of the API contract.
+ */
+export class PostalNotFoundError extends Error {
+  override name = 'PostalNotFoundError';
+}
+
+const POSTAL_NOT_FOUND_MESSAGE =
+  "We couldn't find that postal code. Double-check it (e.g. M5V 2T6).";
+
 export class ZippopotamGeocoder implements Geocoder {
   private readonly country: string;
   private readonly fetchImpl: typeof fetch;
@@ -57,13 +69,18 @@ export class ZippopotamGeocoder implements Geocoder {
     } finally {
       clearTimeout(timer);
     }
+    if (res.status === 404) {
+      // Zippopotam 404s on unknown postal codes — the user's input is wrong,
+      // not the upstream service.
+      throw new PostalNotFoundError(POSTAL_NOT_FOUND_MESSAGE);
+    }
     if (!res.ok) {
       throw new Error(`Zippopotam geocoding failed (${res.status}) for "${postal}"`);
     }
     const body = (await res.json()) as ZippopotamResponse;
     const place = body.places?.[0];
     if (!place) {
-      throw new Error(`Zippopotam returned no location for "${postal}"`);
+      throw new PostalNotFoundError(POSTAL_NOT_FOUND_MESSAGE);
     }
     return { lat: Number(place.latitude), lng: Number(place.longitude) };
   }

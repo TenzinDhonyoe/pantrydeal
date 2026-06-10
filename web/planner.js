@@ -7,7 +7,9 @@
     String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const perKg = (ppg) => money(ppg * 1000) + "/kg";
   const hasUnit = (raw) => /\/\s*\d*\s*(lb|kg|g|oz|ml|l)\b/i.test(raw || "");
-  const km = (d) => (d || d === 0 ? Number(d).toFixed(1) + " km" : "");
+  // Live-mode stores are stamped at the user's own postal location, so a ~0 km
+  // distance is a placeholder, not a real measurement — hide it.
+  const km = (d) => (Number(d) >= 0.05 ? Number(d).toFixed(1) + " km" : "");
   // Live-mode stores have no street address — Backflipp stamps a "Near <postal>"
   // placeholder. Don't feed that into Maps; fall back to the store name + postal.
   const isPlaceholderAddr = (a) => !a || /^near\b/i.test(a);
@@ -153,8 +155,18 @@
     const gaps = cart.neverOnSale && cart.neverOnSale.length
       ? '<p class="note">Buy at regular price (not on sale anywhere this week): ' + cart.neverOnSale.map(esc).join(", ") + ".</p>"
       : "";
+    // Pantry staples the cart assumes you already own (excluded from the total).
+    const staples = cart.staples || [];
+    let staplesNote = "";
+    if (staples.length) {
+      const delta = Number(cart.fullTotalWithStaples || 0) - Number(cart.fullTotal || 0);
+      staplesNote =
+        '<p class="note">Assumes you have: ' + staples.map((s) => esc(s.ingredient)).join(", ") + "." +
+        (delta > 0.01 ? " Buying them all adds ~" + money(delta) + " (total " + money(cart.fullTotalWithStaples) + ")." : "") +
+        "</p>";
+    }
     const meta = '<span class="panel__meta-val">' + money(cart.fullTotal) + '</span><span class="panel__pill">' + cart.coverage + "/" + cart.totalIngredients + " on sale</span>";
-    return section("Weekly shopping cart", meta, tripsHtml + gaps, false);
+    return section("Weekly shopping cart", meta, tripsHtml + gaps + staplesNote, false);
   }
 
   function render(data) {

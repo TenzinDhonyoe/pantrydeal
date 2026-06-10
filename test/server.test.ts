@@ -25,9 +25,13 @@ import {
   handleRequest,
   handleSearch,
   handlePlanWeek,
+  handleRecipe,
+  healthLensDto,
   serveStatic,
 } from '../src/server.js';
-import { search, planPrediabetesWeek } from '../src/runner.js';
+import { search, planPrediabetesWeek, priceRecipeFromSource } from '../src/runner.js';
+import { NoRecipeError } from '../src/core/index.js';
+import type { FlyerItem, Ingredient, PipelineResult, Recipe, Store, StoreBasket } from '../src/core/types.js';
 
 /** A fake IncomingMessage: an async-iterable stream + the bits handlers read. */
 function fakeReq(opts: {
@@ -241,6 +245,248 @@ describe('S4 — per-IP rate limit', () => {
       handleRequest(fakeReq({ method: 'GET', url: '/api/config', ip }), res);
       expect(res.statusCode).toBe(200);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Staples through the API (pricing-honesty)
+// ---------------------------------------------------------------------------
+
+/**
+ * A tiny PipelineResult: one store carrying a real protein (chicken, 500 g) and
+ * a pantry staple (soy sauce, 16 g) — the staple has a matching flyer item so we
+ * can prove it is deliberately excluded by default, not merely unmatched.
+ * No `asWritten` on the ingredients, so no substitution/FormJudge path runs.
+ */
+function stirFryResult(): PipelineResult {
+  const store: Store = {
+    storeId: 's1',
+    merchant: 'Foo Mart',
+    name: 'Foo Mart Queen St',
+    address: '1 Queen St',
+    lat: 0,
+    lng: 0,
+    distanceKm: 1.2,
+  };
+  const chicken: Ingredient = { name: 'chicken', qtyGrams: 500, category: 'protein', substitutes: [] };
+  const soy: Ingredient = { name: 'soy sauce', qtyGrams: 16, category: 'pantry', substitutes: [] };
+  const chickenItem: FlyerItem = {
+    name: 'chicken breast',
+    rawPrice: '$10.00',
+    size: '1 kg',
+    merchant: 'Foo Mart',
+    storeIds: ['s1'],
+    validFrom: '2026-06-01',
+    validTo: '2026-06-30',
+  };
+  const soyItem: FlyerItem = {
+    name: 'soy sauce',
+    rawPrice: '$2.99',
+    size: '500 ml',
+    merchant: 'Foo Mart',
+    storeIds: ['s1'],
+    validFrom: '2026-06-01',
+    validTo: '2026-06-30',
+  };
+  const basket: StoreBasket = {
+    store,
+    matches: [
+      { ingredient: chicken, item: chickenItem, pricePerGram: 0.01, status: 'MATCHED', neededGrams: 500, lineCost: 5 },
+      { ingredient: soy, item: soyItem, pricePerGram: 2.99 / 500, status: 'MATCHED', neededGrams: 16, lineCost: 0.1 },
+    ],
+    matchedCount: 2,
+    totalIngredients: 2,
+    coverage: 1,
+    total: 5.1,
+    projectedTotal: 5.1,
+  };
+  return {
+    recipe: { dish: 'chicken stir fry', servings: 2, ingredients: [chicken, soy] },
+    rankedStores: [basket],
+    cheapest: basket,
+  };
+}
+
+describe('staples through the API', () => {
+  it('default request assumes staples on hand: out of trips, listed in plan.staples', async () => {
+    vi.mocked(search).mockResolvedValueOnce(stirFryResult());
+    const req = fakeReq({ url: '/api/search', body: JSON.stringify({ postal: 'M5V', dinner: 'chicken stir fry' }) });
+    const res = fakeRes();
+    await handleSearch(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const out = JSON.parse(res.body);
+    expect(out.plan.staples).toEqual([{ ingredient: 'soy sauce', neededGrams: 16 }]);
+    expect(out.plan.staplesCount).toBe(1);
+    const tripIngredients = out.plan.trips.flatMap((t: { items: Array<{ ingredient: string }> }) =>
+      t.items.map((i) => i.ingredient),
+    );
+    expect(tripIngredients).toContain('chicken');
+    expect(tripIngredients).not.toContain('soy sauce');
+    // The honest "what buying the staple anyway would cost" figure.
+    expect(out.plan.fullTotalWithStaples).toBeCloseTo(out.plan.fullTotal + 2.99, 2);
+    // All recipe ingredients still counted, staple included.
+    expect(out.plan.totalIngredients).toBe(2);
+  });
+
+  it('includeStaples: true prices everything — staple back in trips, staples empty', async () => {
+    vi.mocked(search).mockResolvedValueOnce(stirFryResult());
+    const req = fakeReq({
+      url: '/api/search',
+      body: JSON.stringify({ postal: 'M5V', dinner: 'chicken stir fry', includeStaples: true }),
+    });
+    const res = fakeRes();
+    await handleSearch(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const out = JSON.parse(res.body);
+    expect(out.plan.staples).toEqual([]);
+    expect(out.plan.staplesCount).toBe(0);
+    const tripIngredients = out.plan.trips.flatMap((t: { items: Array<{ ingredient: string }> }) =>
+      t.items.map((i) => i.ingredient),
+    );
+    expect(tripIngredients).toContain('soy sauce');
+    expect(out.plan.fullTotalWithStaples).toBe(out.plan.fullTotal);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PostalNotFoundError → 422 (matched by err.name; the class is lazily imported)
+// ---------------------------------------------------------------------------
+
+describe('PostalNotFoundError mapping', () => {
+  const POSTAL_MSG = "We couldn't find that postal code. Double-check it (e.g. M5V 2T6).";
+  const postalErr = () => Object.assign(new Error(POSTAL_MSG), { name: 'PostalNotFoundError' });
+
+  it('handleSearch returns 422 with the message and code', async () => {
+    vi.mocked(search).mockRejectedValueOnce(postalErr());
+    const res = fakeRes();
+    await handleSearch(fakeReq({ url: '/api/search', body: JSON.stringify({ postal: 'Z9Z9Z9', dinner: 'tacos' }) }), res);
+    expect(res.statusCode).toBe(422);
+    expect(JSON.parse(res.body)).toEqual({ error: POSTAL_MSG, code: 'PostalNotFoundError' });
+  });
+
+  it('handlePlanWeek returns 422 with the message and code', async () => {
+    vi.mocked(planPrediabetesWeek).mockRejectedValueOnce(postalErr());
+    const res = fakeRes();
+    await handlePlanWeek(fakeReq({ url: '/api/plan-week', body: JSON.stringify({ postal: 'Z9Z9Z9', budget: 80 }) }), res);
+    expect(res.statusCode).toBe(422);
+    expect(JSON.parse(res.body)).toEqual({ error: POSTAL_MSG, code: 'PostalNotFoundError' });
+  });
+
+  it('handleRecipe returns 422 with the message and code', async () => {
+    vi.mocked(priceRecipeFromSource).mockRejectedValueOnce(postalErr());
+    const res = fakeRes();
+    await handleRecipe(
+      fakeReq({ url: '/api/recipe', body: JSON.stringify({ postal: 'Z9Z9Z9', url: 'https://example.com/r' }) }),
+      res,
+    );
+    expect(res.statusCode).toBe(422);
+    expect(JSON.parse(res.body)).toEqual({ error: POSTAL_MSG, code: 'PostalNotFoundError' });
+  });
+});
+
+describe('NoRecipeError web guidance', () => {
+  it('appends the Live-switch hint when the request was NOT live', async () => {
+    const err = new NoRecipeError('unicorn pie');
+    vi.mocked(search).mockRejectedValueOnce(err);
+    const res = fakeRes();
+    await handleSearch(fakeReq({ url: '/api/search', body: JSON.stringify({ postal: 'M5V', dinner: 'unicorn pie' }) }), res);
+    expect(res.statusCode).toBe(422);
+    expect(JSON.parse(res.body)).toEqual({
+      error: err.message + ' Switch the data source to Live to price any dish.',
+    });
+  });
+
+  it('keeps the message as-is when live was requested', async () => {
+    const err = new NoRecipeError('unicorn pie');
+    vi.mocked(search).mockRejectedValueOnce(err);
+    const res = fakeRes();
+    await handleSearch(
+      fakeReq({ url: '/api/search', body: JSON.stringify({ postal: 'M5V', dinner: 'unicorn pie', live: true }) }),
+      res,
+    );
+    expect(res.statusCode).toBe(422);
+    expect(JSON.parse(res.body)).toEqual({ error: err.message });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Blood-sugar lens coverage gate
+// ---------------------------------------------------------------------------
+
+describe('healthLensDto coverage gate', () => {
+  function lensRecipe(names: string[]): Recipe {
+    return {
+      dish: 'test dish',
+      servings: 2,
+      ingredients: names.map((name) => ({ name, qtyGrams: 100, category: 'other' as const, substitutes: [] })),
+    };
+  }
+
+  it('returns the LIMITED shape at 1-of-9 coverage (no macros, no read, no verdict)', () => {
+    const recipe = lensRecipe([
+      'chicken', // only table-known ingredient
+      'ramen noodles',
+      'fish cake',
+      'nori',
+      'mirin',
+      'dashi',
+      'menma',
+      'chashu',
+      'narutomaki',
+    ]);
+    const lens = healthLensDto(recipe);
+    // Exact-shape pin: nothing beyond these five keys may leak into the limited DTO.
+    expect(lens).toEqual({
+      limited: true,
+      matched: 1,
+      total: 9,
+      coverageNote: 'We only recognize 1 of 9 ingredients — not enough for a reliable blood-sugar estimate.',
+      swaps: expect.any(Array),
+    });
+  });
+
+  it('returns the LIMITED shape when matched >= 3 but coverage < 60%', () => {
+    const recipe = lensRecipe([
+      'chicken',
+      'broccoli',
+      'quinoa',
+      'mirin',
+      'dashi',
+      'menma',
+      'chashu',
+      'narutomaki',
+      'fish cake',
+    ]);
+    const lens = healthLensDto(recipe);
+    expect(lens).toMatchObject({ limited: true, matched: 3, total: 9 });
+    expect(lens).not.toHaveProperty('perServing');
+    expect(lens).not.toHaveProperty('read');
+    expect(lens).not.toHaveProperty('verdict');
+  });
+
+  it('returns the full shape with limited:false when every ingredient is known', () => {
+    const recipe = lensRecipe(['chicken', 'broccoli', 'quinoa']);
+    const lens = healthLensDto(recipe);
+    expect(lens).toMatchObject({
+      limited: false,
+      matched: 3,
+      total: 3,
+      coverageNote: null,
+      perServing: {
+        carbsG: expect.any(Number),
+        fiberG: expect.any(Number),
+        proteinG: expect.any(Number),
+      },
+      read: expect.any(String),
+    });
+    expect(lens).toHaveProperty('verdict');
+    expect(lens).toHaveProperty('swaps');
+  });
+
+  it('still returns null when nothing matched at all', () => {
+    expect(healthLensDto(lensRecipe(['mirin', 'dashi', 'menma']))).toBeNull();
   });
 });
 

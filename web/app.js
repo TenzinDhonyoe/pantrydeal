@@ -60,7 +60,11 @@
     const twoStore = p.storeCount === 2;
     $("heroRibbon").textContent = "Cheapest way to shop";
     $("heroStore").textContent = twoStore ? "2 stores" : p.storeCount === 1 ? "1 store" : "—";
-    $("heroSub").textContent = `${p.coverage} of ${p.totalIngredients} ingredients on sale this week`;
+    const staplesBit =
+      p.staplesCount > 0
+        ? ` · ${p.staplesCount} pantry staple${p.staplesCount === 1 ? "" : "s"} assumed`
+        : "";
+    $("heroSub").textContent = `${p.coverage} of ${p.totalIngredients} ingredients on sale this week${staplesBit}`;
     $("heroTotal").textContent = money(p.fullTotal);
 
     $("savePill").textContent = p.savingsVsRegular > 0.01 ? `Save ~$${money(p.savingsVsRegular)} vs. regular price` : "Best prices nearby";
@@ -150,6 +154,17 @@
       );
     }
 
+    // Pantry staples the plan assumes you already own (excluded from the total).
+    if ((p.staples || []).length) {
+      const delta = Number(p.fullTotalWithStaples || 0) - Number(p.fullTotal || 0);
+      parts.push(
+        `<div class="card others"><h3>Pantry staples assumed</h3>` +
+          `<p class="others__note" style="margin-top:8px">Assumes you have: ${p.staples.map((s) => esc(s.ingredient)).join(", ")}.` +
+          (delta > 0.01 ? ` Buying them all adds ~$${money(delta)} (total $${money(p.fullTotalWithStaples)}).` : "") +
+          `</p></div>`,
+      );
+    }
+
     wrap.innerHTML = parts.join("");
   }
 
@@ -179,7 +194,9 @@
     "This takes ~30 seconds…",
   ];
 
-  function runSearch(zip, dinner, people, source) {
+  // `onSuccess` (optional) fires only after a successful render, so failed
+  // searches don't pollute the Recents list.
+  function runSearch(zip, dinner, people, source, onSuccess) {
     show("loadingState");
     $("searchBtn").disabled = true;
     $("footStamp").textContent = source === "live" ? "live flyer data" : "sample data";
@@ -217,6 +234,7 @@
         }
         render(body, source);
         show("results");
+        if (onSuccess) onSuccess();
         const r = $("results");
         r.classList.remove("is-in");
         requestAnimationFrame(() => requestAnimationFrame(() => r.classList.add("is-in")));
@@ -261,8 +279,9 @@
         const src = document.querySelector(`input[name="source"][value="${entry.source}"]`);
         if (src && !src.disabled) src.checked = true;
         const source = document.querySelector('input[name="source"]:checked').value;
-        runSearch(entry.zip, entry.dinner, entry.people, source);
-        saveRecent({ ...entry, source });
+        runSearch(entry.zip, entry.dinner, entry.people, source, () =>
+          saveRecent({ ...entry, source }),
+        );
       });
       list.appendChild(b);
     });
@@ -313,8 +332,7 @@
       if (!dinner) { $("dinner").classList.add("invalid"); ok = false; } else $("dinner").classList.remove("invalid");
       if (!ok) { (zip ? $("dinner") : $("zip")).focus(); return; }
 
-      runSearch(zip, dinner, people, source);
-      saveRecent({ zip, dinner, people, source });
+      runSearch(zip, dinner, people, source, () => saveRecent({ zip, dinner, people, source }));
     });
 
     ["zip", "dinner"].forEach((id) =>

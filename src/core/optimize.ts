@@ -12,10 +12,25 @@
 import type { FlyerItem, Ingredient, Store, StoreBasket } from './types.js';
 import { planPurchase, type PurchasePlan } from './purchase.js';
 
-/** Markup over the dearest sale price used to estimate an off-sale price. */
+/** Assumed markup of an item's regular price over its sale price. */
 const REGULAR_MARKUP = 1.25;
 /** A price counts as a "good deal" at or below this fraction of the week's median. */
 const GOOD_DEAL_FRACTION = 0.85;
+
+/** A pantry/spice ingredient at or below this many grams counts as a staple. */
+export const STAPLE_MAX_GRAMS = 100;
+
+/**
+ * Is this ingredient a pantry staple the shopper almost certainly has on hand?
+ * True for tiny amounts (<= STAPLE_MAX_GRAMS) of shelf-stable categories
+ * ('pantry'/'spice'): nobody buys an 8 L jug of soy sauce for a 16 g splash, and
+ * pricing the recipe as if they would is dishonest in the other direction.
+ * Everything else — proteins, produce, dairy, and any large quantity — keeps
+ * honest whole-pack pricing, because those genuinely have to be bought.
+ */
+export function isStaple(ing: Ingredient): boolean {
+  return (ing.category === 'pantry' || ing.category === 'spice') && ing.qtyGrams <= STAPLE_MAX_GRAMS;
+}
 
 export interface PlanItem {
   ingredient: string;
@@ -53,7 +68,12 @@ export interface ShoppingPlan {
   savingsVsOneStore: number;
   /** What a second stop *could* save (may be below the worth-it bar). */
   secondStopSavings: number;
-  /** Estimated savings on the on-sale items vs buying them at regular price. */
+  /**
+   * Estimated savings on the items actually bought (in trips) vs the SAME items
+   * at their regular price: per item, realCost × (REGULAR_MARKUP − 1) — i.e.
+   * "this sale price is ~25% below the same pack's regular price" — summed.
+   * Bounded by construction: never exceeds (REGULAR_MARKUP − 1) × realOnSale.
+   */
   savingsVsRegular: number;
   /** Ingredients on sale somewhere, but not at a chosen store. */
   onSaleElsewhere: string[];
@@ -61,7 +81,21 @@ export interface ShoppingPlan {
   neverOnSale: string[];
   bestDeals: PlanItem[];
   coverage: number;
+  /** Count of ALL recipe ingredients, including any staples assumed on hand. */
   totalIngredients: number;
+  /**
+   * Staples assumed already on hand (see isStaple). Empty unless
+   * options.assumeStaples is true. These are excluded from trips, totals,
+   * coverage, and the on-sale/never-on-sale lists.
+   */
+  staples: Array<{ ingredient: string; neededGrams: number }>;
+  /**
+   * fullTotal PLUS the real pack cost of buying each assumed staple at its
+   * cheapest store (cheapest realCost across stores). Staples with no offer at
+   * any store contribute 0 — there's no price data to add. When assumeStaples
+   * is off this equals fullTotal exactly.
+   */
+  fullTotalWithStaples: number;
 }
 
 export interface OptimizeOptions {
@@ -75,6 +109,13 @@ export interface OptimizeOptions {
   worthItBar?: number;
   /** Largest pack we'll treat as a sensible consumer purchase, in grams. Default 11000 (11 kg). */
   maxPackGrams?: number;
+  /**
+   * Assume tiny pantry/spice amounts (see isStaple) are already on hand: exclude
+   * them from trips and totals, list them in plan.staples, and report what buying
+   * them anyway would cost via plan.fullTotalWithStaples. Default false — no
+   * behavior change for existing callers.
+   */
+  assumeStaples?: boolean;
 }
 
 interface Offer {
@@ -165,9 +206,28 @@ export function optimizePlan(
   const maxStores = options.maxStores ?? 2;
   const worthItBar = options.worthItBar ?? 5;
   const maxPackGrams = options.maxPackGrams ?? 11000;
-  const names = ingredients.map((i) => i.name);
+  const assumeStaples = options.assumeStaples ?? false;
+
+  // Staples are assumed on hand: planned around, not shopped for. Everything
+  // else ("active" ingredients) goes through the normal optimizer.
+  const stapleIngs = assumeStaples ? ingredients.filter((i) => isStaple(i)) : [];
+  const active = assumeStaples ? ingredients.filter((i) => !isStaple(i)) : ingredients;
+  const names = active.map((i) => i.name);
   const byStore = buildOffers(baskets, maxPackGrams);
   const storeIds = [...byStore.keys()];
+
+  // What buying the staples anyway would cost: cheapest real pack cost across
+  // stores, per staple. Staples on sale nowhere contribute 0 (no price data).
+  const staples = stapleIngs.map((i) => ({ ingredient: i.name, neededGrams: i.qtyGrams }));
+  let staplesCost = 0;
+  for (const s of stapleIngs) {
+    let cheapest = Infinity;
+    for (const id of storeIds) {
+      const o = byStore.get(id)!.offers.get(s.name);
+      if (o && o.plan.realCost < cheapest) cheapest = o.plan.realCost;
+    }
+    if (Number.isFinite(cheapest)) staplesCost += cheapest;
+  }
 
   // Per-ingredient market stats across all stores that have it on sale.
   const regularEst = new Map<string, number>();
@@ -185,7 +245,11 @@ export function optimizePlan(
       continue;
     }
     onSaleNames.push(name);
-    regularEst.set(name, Math.max(...offers.map((o) => o.plan.realCost)) * REGULAR_MARKUP);
+    // Regular-price estimate: the CHEAPEST pack you could actually buy this week,
+    // marked up. Min (not max) across stores, so one oversized pack at a single
+    // store can't poison the estimate. Feeds estRegularGaps and the full-recipe
+    // score used to pick stores (fullCost) — intentionally the same basis.
+    regularEst.set(name, Math.min(...offers.map((o) => o.plan.realCost)) * REGULAR_MARKUP);
     medianPpg.set(name, median(offers.map((o) => o.pricePerGram)));
   }
 
@@ -231,6 +295,8 @@ export function optimizePlan(
       bestDeals: [],
       coverage: 0,
       totalIngredients: ingredients.length,
+      staples,
+      fullTotalWithStaples: 0,
     };
   }
 
@@ -247,7 +313,7 @@ export function optimizePlan(
     const a = chosen.assignment.get(name);
     if (!a) continue;
     coveredNames.add(name);
-    const need = ingredients.find((i) => i.name === name)!.qtyGrams;
+    const need = active.find((i) => i.name === name)!.qtyGrams;
     const med = medianPpg.get(name)!;
     const planItem: PlanItem = {
       ingredient: name,
@@ -264,7 +330,10 @@ export function optimizePlan(
       goodDeal: a.offer.pricePerGram <= GOOD_DEAL_FRACTION * med,
     };
     realOnSale += planItem.realCost;
-    savingsVsRegular += Math.max(0, (regularEst.get(name) ?? planItem.realCost) - planItem.realCost);
+    // Same-pack savings: this sale price vs the SAME item's estimated regular
+    // price (realCost × REGULAR_MARKUP). Never compares across pack sizes, so
+    // it's bounded at (REGULAR_MARKUP − 1) × realOnSale.
+    savingsVsRegular += planItem.realCost * (REGULAR_MARKUP - 1);
     const list = itemsByStore.get(a.storeId) ?? [];
     list.push(planItem);
     itemsByStore.set(a.storeId, list);
@@ -299,12 +368,13 @@ export function optimizePlan(
     coverage: bestSingle.assignment.size,
   };
 
+  const fullTotal = realOnSale + estRegularGaps;
   return {
     trips,
     storeCount: trips.length,
     realOnSale,
     estRegularGaps,
-    fullTotal: realOnSale + estRegularGaps,
+    fullTotal,
     oneStore,
     savingsVsOneStore: Math.max(0, bestSingle.cost - chosen.cost),
     secondStopSavings,
@@ -314,5 +384,7 @@ export function optimizePlan(
     bestDeals,
     coverage: coveredNames.size,
     totalIngredients: ingredients.length,
+    staples,
+    fullTotalWithStaples: fullTotal + staplesCost,
   };
 }

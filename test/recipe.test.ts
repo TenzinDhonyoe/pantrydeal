@@ -76,6 +76,21 @@ describe('StaticRecipeParser', () => {
     await expect(parser.parse('beef wellington')).rejects.toThrow(/No recipe found/);
   });
 
+  it('NoRecipeError lists the recipe book without CLI-only jargon', async () => {
+    try {
+      await parser.parse('beef wellington');
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      const message = (err as NoRecipeError).message;
+      // The message is shown verbatim in the web UI, so it must list the book…
+      for (const recipe of RECIPE_BOOK) {
+        expect(message).toContain(recipe.dish);
+      }
+      // …but never leak the CLI flag (web users have a "Live" toggle instead).
+      expect(message).not.toContain('--live');
+    }
+  });
+
   it('NoRecipeError carries the dinner string', async () => {
     try {
       await parser.parse('foie gras');
