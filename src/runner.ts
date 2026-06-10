@@ -267,6 +267,12 @@ export interface WeekRequest {
   /** Dish names to leave out (e.g. after a "swap this dinner"), re-plans the rest. */
   exclude?: string[];
   radiusKm?: number;
+  /**
+   * Price EVERY ingredient, including tiny pantry staples. Default false: assume
+   * staples (soy sauce splash, oil drizzle, spices) are already on hand and list
+   * them separately on the cart instead of charging whole packs for them.
+   */
+  includeStaples?: boolean;
 }
 
 export interface MealPricing {
@@ -400,10 +406,15 @@ export async function planPrediabetesWeek(req: WeekRequest): Promise<WeekResult>
     : await resolveFixtureContext(req.postal, radiusKm);
   const matcher = sameFoodMatcher(ctx.matcher);
 
+  // Staples policy (default: assume on hand). Applied to BOTH the per-candidate
+  // ranking pass and the pooled cart so meals are ranked on the same basis the
+  // shopper actually pays for.
+  const pricingOptions = { assumeStaples: !req.includeStaples };
+
   // 3. Price each candidate alone (only to rank which meals to pick).
   const meals: MealPricing[] = candidates.map((recipe) => ({
     recipe,
-    plan: priceRecipe(recipe.ingredients, ctx.stores, ctx.items, matcher),
+    plan: priceRecipe(recipe.ingredients, ctx.stores, ctx.items, matcher, pricingOptions),
   }));
 
   // 4. Pick the cheapest compliant week.
@@ -415,7 +426,7 @@ export async function planPrediabetesWeek(req: WeekRequest): Promise<WeekResult>
   // 5. Pool the chosen meals into ONE weekly cart and price it once — shared staples
   //    are bought a single time, so the total is what you'd actually pay.
   const chosenMeals = picked.meals.map((p) => meals.find((m) => m.recipe.dish === p.recipe.dish)!);
-  const cart = priceRecipe(poolIngredients(chosenMeals.map((m) => m.recipe)), ctx.stores, ctx.items, matcher);
+  const cart = priceRecipe(poolIngredients(chosenMeals.map((m) => m.recipe)), ctx.stores, ctx.items, matcher, pricingOptions);
 
   const week: WeekPlan = {
     ...picked,

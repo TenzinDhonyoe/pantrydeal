@@ -205,6 +205,11 @@ async function main(): Promise<number> {
   } catch (err) {
     if (err instanceof NoRecipeError) {
       process.stderr.write(`\n${err.message}\n`);
+      // CLI-only hint: the error message itself stays channel-neutral so the
+      // web UI (which has a "Live" toggle, not a flag) can reuse it verbatim.
+      if (!args.live) {
+        process.stderr.write('Tip: pass --live to parse any dish with AI.\n');
+      }
       return 1;
     }
     process.stderr.write(`\nError: ${(err as Error).message}\n`);

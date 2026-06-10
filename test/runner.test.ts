@@ -75,6 +75,37 @@ describe('planPrediabetesWeek offline (T1 smoke)', () => {
     expect(typeof result.week.withinBudget).toBe('boolean');
   });
 
+  it('default week assumes staples on hand: cart.staples populated, not in trips', async () => {
+    const result = await planPrediabetesWeek({
+      postal: 'M8Y',
+      budget: 100,
+      days: 3,
+      people: 2,
+      live: false,
+    });
+    // Olive oil (30 g, category 'pantry') is in nearly every prediabetes recipe,
+    // so a default week must surface at least it as an assumed-on-hand staple.
+    expect(result.cart.staples.length).toBeGreaterThan(0);
+    expect(result.cart.staples.map((s) => s.ingredient)).toContain('olive oil');
+    const tripIngredients = result.cart.trips.flatMap((t) => t.items.map((i) => i.ingredient));
+    expect(tripIngredients).not.toContain('olive oil');
+    // Buying the staples anyway can only cost more (or the same, if unpriced).
+    expect(result.cart.fullTotalWithStaples).toBeGreaterThanOrEqual(result.cart.fullTotal);
+  });
+
+  it('includeStaples: true prices everything — cart.staples empty', async () => {
+    const result = await planPrediabetesWeek({
+      postal: 'M8Y',
+      budget: 100,
+      days: 3,
+      people: 2,
+      live: false,
+      includeStaples: true,
+    });
+    expect(result.cart.staples).toEqual([]);
+    expect(result.cart.fullTotalWithStaples).toBe(result.cart.fullTotal);
+  });
+
   it('produces no animal-product meals under a vegan restriction', async () => {
     const result = await planPrediabetesWeek({
       postal: 'M8Y',

@@ -190,9 +190,11 @@ async function resolveSubstitutions(
   return out;
 }
 
-async function toResponse(result: PipelineResult, postal: string) {
+async function toResponse(result: PipelineResult, postal: string, includeStaples = false) {
   const { recipe, rankedStores } = result;
-  const plan = optimizePlan(recipe.ingredients, rankedStores);
+  // Default: assume tiny pantry/spice amounts are on hand (honest pricing).
+  // includeStaples: the shopper has nothing — price every ingredient.
+  const plan = optimizePlan(recipe.ingredients, rankedStores, { assumeStaples: !includeStaples });
 
   // Cut/form honesty flags, resolved once for all items across the trips.
   const subs = await resolveSubstitutions(recipe, plan.trips.flatMap((t) => t.items));
@@ -245,6 +247,10 @@ async function toResponse(result: PipelineResult, postal: string) {
       bestDeals: plan.bestDeals.map((d) => ({ ingredient: d.ingredient, product: d.item.name, store: d.item.merchant })),
       onSaleElsewhere: plan.onSaleElsewhere.map((name) => ({ ingredient: name, ...(elsewhereFor(name) ?? {}) })),
       neverOnSale: plan.neverOnSale,
+      // Pantry staples assumed on hand (empty when includeStaples was true).
+      staples: plan.staples,
+      staplesCount: plan.staples.length,
+      fullTotalWithStaples: plan.fullTotalWithStaples,
     },
   };
 }
@@ -255,12 +261,30 @@ async function toResponse(result: PipelineResult, postal: string) {
  * (most web recipes contain un-tabled items, so this is an honest partial estimate),
  * a gentle plain-language read, lower-carb swaps, and — only when every ingredient
  * is known — the prediabetes pass/amber verdict. Null when nothing matched.
+ *
+ * Coverage gate: with fewer than 3 matched ingredients or under 60% coverage the
+ * macro estimate is junk (a noodle dish read "1g carb / Lower-carb" off one known
+ * ingredient), so we return a LIMITED shape — no numbers, no read, no verdict —
+ * just honest coverage plus the swaps, which don't need macro data.
+ * Exported for testing.
  */
-function healthLensDto(recipe: Recipe) {
+export function healthLensDto(recipe: Recipe) {
   // Per-serving math uses the recipe's own yield, not the shopper headcount.
   const partial = nutritionForMatched(recipe.ingredients, recipe.servings);
   if (!partial) return null;
   const { nutrition, matched, total, missing } = partial;
+
+  const coverage = matched / total;
+  if (matched < 3 || coverage < 0.6) {
+    return {
+      limited: true as const,
+      matched,
+      total,
+      coverageNote: `We only recognize ${matched} of ${total} ingredients — not enough for a reliable blood-sugar estimate.`,
+      swaps: lowerCarbSwaps(recipe.ingredients),
+    };
+  }
+
   const carbsG = Math.round(nutrition.carbsG);
   const fiberG = Math.round(nutrition.fiberG);
   const proteinG = Math.round(nutrition.proteinG);
@@ -278,6 +302,7 @@ function healthLensDto(recipe: Recipe) {
   const verdict = fullCoverage ? validateRecipe(recipe) : null;
 
   return {
+    limited: false as const,
     perServing: { carbsG, fiberG, proteinG },
     matched,
     total,
@@ -332,12 +357,25 @@ function toWeekResponse(result: WeekResult, postal: string, people: number) {
         items: t.items.map((it) => itemDto(it)),
       })),
       neverOnSale: cart.neverOnSale,
+      // Pantry staples assumed on hand (empty when includeStaples was true).
+      staples: cart.staples,
+      staplesCount: cart.staples.length,
+      fullTotalWithStaples: cart.fullTotalWithStaples,
     },
   };
 }
 
+/** Shared 422 mapping for a bad postal code (matched by name — see zippopotam.ts). */
+function sendPostalNotFound(res: ServerResponse, err: unknown): boolean {
+  if (err instanceof Error && err.name === 'PostalNotFoundError') {
+    sendJson(res, 422, { error: err.message, code: 'PostalNotFoundError' });
+    return true;
+  }
+  return false;
+}
+
 export async function handlePlanWeek(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  let body: { postal?: string; people?: number; budget?: number; days?: number; live?: boolean; restrictions?: string[]; exclude?: string[] };
+  let body: { postal?: string; people?: number; budget?: number; days?: number; live?: boolean; restrictions?: string[]; exclude?: string[]; includeStaples?: boolean };
   try {
     body = JSON.parse((await readBody(req)) || '{}');
   } catch (err) {
@@ -365,9 +403,12 @@ export async function handlePlanWeek(req: IncomingMessage, res: ServerResponse):
       live,
       restrictions: Array.isArray(body.restrictions) ? body.restrictions : undefined,
       exclude: Array.isArray(body.exclude) ? body.exclude : undefined,
+      includeStaples: Boolean(body.includeStaples),
     });
     sendJson(res, 200, toWeekResponse(result, postal, people ?? 4));
   } catch (err) {
+    // A bad postal code is the user's to fix → 422 with the safe message.
+    if (sendPostalNotFound(res, err)) return;
     // S2: log the real cause server-side, return a generic message so vendor /
     // upstream error bodies (e.g. Gemini error text) never leak to the client.
     const e = err instanceof Error ? err : new Error(String(err));
@@ -377,7 +418,7 @@ export async function handlePlanWeek(req: IncomingMessage, res: ServerResponse):
 }
 
 export async function handleSearch(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  let body: { postal?: string; dinner?: string; people?: number; live?: boolean };
+  let body: { postal?: string; dinner?: string; people?: number; live?: boolean; includeStaples?: boolean };
   try {
     body = JSON.parse((await readBody(req)) || '{}');
   } catch (err) {
@@ -402,11 +443,16 @@ export async function handleSearch(req: IncomingMessage, res: ServerResponse): P
 
   try {
     const result = await search({ postal, dinner, people, live });
-    sendJson(res, 200, await toResponse(result, postal));
+    sendJson(res, 200, await toResponse(result, postal, Boolean(body.includeStaples)));
   } catch (err) {
+    // A bad postal code is the user's to fix → 422 with the safe message.
+    if (sendPostalNotFound(res, err)) return;
     // NoRecipeError is a safe, user-facing domain error → 422 with its message.
+    // Off live, point at the web UI's own escape hatch (the core message no
+    // longer mentions the CLI's --live flag).
     if (err instanceof NoRecipeError) {
-      return sendJson(res, 422, { error: err.message });
+      const message = live ? err.message : err.message + ' Switch the data source to Live to price any dish.';
+      return sendJson(res, 422, { error: message });
     }
     // S2: any other failure → log the real cause server-side, return a generic
     // message so vendor / upstream error bodies never leak to the client.
@@ -417,7 +463,7 @@ export async function handleSearch(req: IncomingMessage, res: ServerResponse): P
 }
 
 export async function handleRecipe(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  let body: { postal?: string; url?: string; text?: string; people?: number };
+  let body: { postal?: string; url?: string; text?: string; people?: number; includeStaples?: boolean };
   try {
     body = JSON.parse((await readBody(req)) || '{}');
   } catch (err) {
@@ -444,7 +490,11 @@ export async function handleRecipe(req: IncomingMessage, res: ServerResponse): P
 
   try {
     const { result, source } = await priceRecipeFromSource({ postal, url, text, people });
-    sendJson(res, 200, { ...(await toResponse(result, postal)), health: healthLensDto(result.recipe), source });
+    sendJson(res, 200, {
+      ...(await toResponse(result, postal, Boolean(body.includeStaples))),
+      health: healthLensDto(result.recipe),
+      source,
+    });
   } catch (err) {
     // Map the named parser errors to honest statuses + messages (no silent failures).
     const e = err instanceof Error ? err : new Error(String(err));
@@ -453,6 +503,7 @@ export async function handleRecipe(req: IncomingMessage, res: ServerResponse): P
       'BlockedHostError',
       'FetchFailedError',
       'NoRecipeFoundError',
+      'PostalNotFoundError',
     ]);
     if (userFacing.has(e.name)) {
       const status = e.name === 'BlockedHostError' ? 400 : 422;

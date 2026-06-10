@@ -14,7 +14,7 @@ export class NoRecipeError extends Error {
     super(
       `No recipe found for "${dinner}". The v0 recipe book covers: ` +
         RECIPE_BOOK.map((r) => r.dish).join(', ') +
-        '. (Use --live for open-ended parsing.)',
+        '.',
     );
     this.name = 'NoRecipeError';
   }

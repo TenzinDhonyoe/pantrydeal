@@ -9,7 +9,9 @@
     String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const perKg = (ppg) => money(ppg * 1000) + "/kg";
   const hasUnit = (raw) => /\/\s*\d*\s*(lb|kg|g|oz|ml|l)\b/i.test(raw || "");
-  const km = (d) => (d || d === 0 ? Number(d).toFixed(1) + " km" : "");
+  // Live-mode stores are stamped at the user's own postal location, so a ~0 km
+  // distance is a placeholder, not a real measurement — hide it.
+  const km = (d) => (Number(d) >= 0.05 ? Number(d).toFixed(1) + " km" : "");
   const isPlaceholderAddr = (a) => !a || /^near\b/i.test(a);
   const mapsUrl = (store, address, postal) =>
     "https://www.google.com/maps/search/?api=1&query=" +
@@ -110,6 +112,20 @@
   // The differentiator: a gentle prediabetes read on the imported recipe.
   function healthSection(h) {
     if (!h) return "";
+    const swaps = (h.swaps || []).length
+      ? '<div class="health__swaps"><div class="health__swaps-h">Lower-carb swaps</div>' +
+        h.swaps
+          .map((s) => '<div class="swap-row">💡 <b>' + esc(s.ingredient) + "</b> — " + esc(s.suggestion) + "</div>")
+          .join("") +
+        "</div>"
+      : "";
+    const coverage = h.coverageNote ? '<p class="health__cov">' + esc(h.coverageNote) + "</p>" : "";
+    // Limited shape: too few ingredients matched for honest per-serving macros.
+    // Lead with the coverage note; no macros, no read, no verdict.
+    if (h.limited === true) {
+      const meta = '<span class="panel__pill">limited estimate</span>';
+      return section("Blood-sugar lens", meta, coverage + swaps, true);
+    }
     const ps = h.perServing;
     const macros =
       '<div class="meal__macros">' +
@@ -122,14 +138,6 @@
         (h.verdict.fits ? "✓ Fits the draft prediabetes targets." : "⚠ " + esc(h.verdict.notes.join("; "))) +
         "</p>"
       : "";
-    const swaps = (h.swaps || []).length
-      ? '<div class="health__swaps"><div class="health__swaps-h">Lower-carb swaps</div>' +
-        h.swaps
-          .map((s) => '<div class="swap-row">💡 <b>' + esc(s.ingredient) + "</b> — " + esc(s.suggestion) + "</div>")
-          .join("") +
-        "</div>"
-      : "";
-    const coverage = h.coverageNote ? '<p class="health__cov">' + esc(h.coverageNote) + "</p>" : "";
     const body =
       '<p class="panel__lead">Per serving (estimate, not medical advice)</p>' +
       macros +
@@ -154,16 +162,30 @@
     const gaps = plan.neverOnSale && plan.neverOnSale.length
       ? '<p class="note">Buy at regular price (not on sale near you this week): ' + plan.neverOnSale.map(esc).join(", ") + ".</p>"
       : "";
+    // Pantry staples the plan assumes you already own (excluded from the total).
+    const staples = plan.staples || [];
+    let staplesNote = "";
+    if (staples.length) {
+      const delta = Number(plan.fullTotalWithStaples || 0) - Number(plan.fullTotal || 0);
+      staplesNote =
+        '<p class="note">Assumes you have: ' + staples.map((s) => esc(s.ingredient)).join(", ") + "." +
+        (delta > 0.01 ? " Buying them all adds ~" + money(delta) + " (total " + money(plan.fullTotalWithStaples) + ")." : "") +
+        "</p>";
+    }
     const meta = '<span class="panel__meta-val">' + money(plan.fullTotal) + '</span><span class="panel__pill">' + plan.coverage + "/" + plan.totalIngredients + " on sale</span>";
-    return section("Shopping cart", meta, tripsHtml + gaps, false);
+    return section("Shopping cart", meta, tripsHtml + gaps + staplesNote, false);
   }
 
   function render(data) {
     const plan = data.plan;
     const r = data.recipe;
     $("heroDish").textContent = r.dish;
+    const staplesBit =
+      plan.staplesCount > 0
+        ? " · " + plan.staplesCount + (plan.staplesCount === 1 ? " pantry staple assumed" : " pantry staples assumed")
+        : "";
     $("heroSub").textContent =
-      r.ingredients.length + " ingredients · " + plan.coverage + "/" + plan.totalIngredients + " on sale · " + esc(data.postal);
+      r.ingredients.length + " ingredients · " + plan.coverage + "/" + plan.totalIngredients + " on sale · " + esc(data.postal) + staplesBit;
     $("heroTotal").textContent = Number(plan.fullTotal).toFixed(2);
     const save = plan.savingsVsRegular;
     $("savePill").textContent = save && save > 0.5 ? "saved ~" + money(save) + " vs. regular price" : "best prices we found";

@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { optimizePlan } from '../src/core/optimize.js';
+import { optimizePlan, isStaple, STAPLE_MAX_GRAMS } from '../src/core/optimize.js';
 import { buildBasket } from '../src/core/rank.js';
-import type { FlyerItem, Ingredient, Store, StoreBasket } from '../src/core/types.js';
+import type { Category, FlyerItem, Ingredient, Store, StoreBasket } from '../src/core/types.js';
 
 function store(storeId: string, name: string): Store {
   return { storeId, merchant: name, name, address: '', lat: 0, lng: 0, distanceKm: 0 };
 }
-function ing(name: string, qtyGrams: number): Ingredient {
-  return { name, qtyGrams, category: 'other', substitutes: [] };
+function ing(name: string, qtyGrams: number, category: Category = 'other'): Ingredient {
+  return { name, qtyGrams, category, substitutes: [] };
 }
 function item(name: string, rawPrice: string, size: string | undefined, storeId: string): FlyerItem {
   return { name, rawPrice, size, merchant: storeId, storeIds: [storeId], validFrom: '', validTo: '' };
@@ -109,6 +109,47 @@ describe('optimizePlan', () => {
     expect(plan.neverOnSale).toEqual(['chicken']);
   });
 
+  it('savingsVsRegular is the same-pack discount: exactly 25% of the on-sale subtotal', () => {
+    const ings = [ing('chicken', 600), ing('rice', 300)];
+    const A = store('A', 'StoreA');
+    const B = store('B', 'StoreB');
+    const aItems = [item('Chicken', '$2.00/lb', undefined, 'A'), item('Rice', '$20.00', '1 kg', 'A')];
+    const bItems = [item('Chicken', '$9.00/lb', undefined, 'B'), item('Rice', '$5.00', '4 kg', 'B')];
+
+    const plan = optimizePlan(ings, [basket(A, ings, aItems), basket(B, ings, bItems)]);
+
+    // savings = sum(realCost * (1.25 - 1)) over bought items = 0.25 * realOnSale
+    expect(plan.savingsVsRegular).toBeCloseTo(0.25 * plan.realOnSale, 9);
+    // bounded: never exceeds 25% of what you actually spend on sale items
+    expect(plan.savingsVsRegular).toBeLessThanOrEqual(0.25 * plan.realOnSale + 1e-9);
+    // and certainly never exceeds the cart total itself
+    expect(plan.savingsVsRegular).toBeLessThan(plan.realOnSale);
+  });
+
+  it('estRegularGaps uses the cheapest buyable pack across stores, marked up 25%', () => {
+    const ings = [ing('chicken', 600), ing('ginger', 20)];
+    const A = store('A', 'StoreA');
+    const B = store('B', 'StoreB');
+    const C = store('C', 'StoreC');
+    // ginger on sale at B ($2.00) and C ($0.50); chicken only at A. A wins as the
+    // single store; the ginger gap must be priced off the CHEAPEST pack ($0.50),
+    // not the dearest — one oversized pack can't poison the estimate.
+    const plan = optimizePlan(
+      ings,
+      [
+        basket(A, ings, [item('Chicken', '$2.00/lb', undefined, 'A')]),
+        basket(B, ings, [item('Ginger', '$2.00', '100 g', 'B')]),
+        basket(C, ings, [item('Ginger', '$0.50', '100 g', 'C')]),
+      ],
+      { worthItBar: 5 },
+    );
+
+    expect(plan.storeCount).toBe(1);
+    expect(plan.onSaleElsewhere).toEqual(['ginger']);
+    expect(plan.estRegularGaps).toBeCloseTo(0.5 * 1.25, 9);
+    expect(plan.fullTotal).toBeCloseTo(plan.realOnSale + 0.625, 9);
+  });
+
   it('computes a median across an odd number of stores', () => {
     const ings = [ing('onion', 150)];
     const stores = [
@@ -121,5 +162,94 @@ describe('optimizePlan', () => {
     const onion = plan.trips[0]!.items[0]!;
     expect(onion.item.merchant).toBe('A');
     expect(onion.goodDeal).toBe(true);
+  });
+});
+
+describe('isStaple', () => {
+  it('is true for tiny pantry/spice amounts only', () => {
+    expect(isStaple(ing('soy sauce', 16, 'pantry'))).toBe(true);
+    expect(isStaple(ing('cumin', 5, 'spice'))).toBe(true);
+    expect(isStaple(ing('sugar', STAPLE_MAX_GRAMS, 'pantry'))).toBe(true); // boundary: <= 100 g
+  });
+
+  it('is false above the gram threshold, even for pantry items', () => {
+    expect(isStaple(ing('flour', 101, 'pantry'))).toBe(false);
+    // pooled-week scale: 120 g of a pantry item across several recipes is a real purchase
+    expect(isStaple(ing('sugar', 120, 'pantry'))).toBe(false);
+  });
+
+  it('is false for non-shelf-stable categories regardless of quantity', () => {
+    expect(isStaple(ing('cilantro', 10, 'produce'))).toBe(false);
+    expect(isStaple(ing('rice', 300, 'grain'))).toBe(false);
+    expect(isStaple(ing('butter', 14, 'dairy'))).toBe(false);
+  });
+});
+
+describe('assumeStaples', () => {
+  const chickenG = 600;
+  const ings = [ing('chicken', chickenG, 'protein'), ing('soy sauce', 16, 'pantry')];
+  const A = store('A', 'StoreA');
+  const B = store('B', 'StoreB');
+  // A: cheap chicken + an absurd 8 kg soy sauce jug. B: a sane 500 g soy sauce bottle.
+  const aItems = [item('Chicken', '$2.00/lb', undefined, 'A'), item('Soy Sauce', '$28.99', '8 kg', 'A')];
+  const bItems = [item('Soy Sauce', '$3.99', '500 g', 'B')];
+  const baskets = () => [basket(A, ings, aItems), basket(B, ings, bItems)];
+
+  it('excludes tiny pantry items from trips/totals and lists them as staples', () => {
+    const plan = optimizePlan(ings, baskets(), { assumeStaples: true });
+
+    expect(plan.staples).toEqual([{ ingredient: 'soy sauce', neededGrams: 16 }]);
+    const bought = plan.trips.flatMap((t) => t.items).map((i) => i.ingredient);
+    expect(bought).toEqual(['chicken']);
+    expect(plan.storeCount).toBe(1);
+
+    const chickenCost = (2 / 453.59237) * chickenG; // $2/lb by weight
+    expect(plan.realOnSale).toBeCloseTo(chickenCost, 6);
+    expect(plan.fullTotal).toBeCloseTo(chickenCost, 6);
+    expect(plan.estRegularGaps).toBe(0);
+    expect(plan.savingsVsRegular).toBeCloseTo(0.25 * plan.realOnSale, 9);
+
+    // staples never leak into coverage bookkeeping or deal lists
+    expect(plan.coverage).toBe(1);
+    expect(plan.totalIngredients).toBe(2); // still counts ALL ingredients
+    expect(plan.onSaleElsewhere).not.toContain('soy sauce');
+    expect(plan.neverOnSale).not.toContain('soy sauce');
+    expect(plan.bestDeals.map((d) => d.ingredient)).not.toContain('soy sauce');
+
+    // fullTotalWithStaples adds the staple back at its CHEAPEST pack ($3.99 bottle,
+    // not the $28.99 jug)
+    expect(plan.fullTotalWithStaples).toBeCloseTo(plan.fullTotal + 3.99, 6);
+  });
+
+  it('is off by default: staples empty and fullTotalWithStaples === fullTotal', () => {
+    const plan = optimizePlan(ings, baskets());
+    expect(plan.staples).toEqual([]);
+    expect(plan.fullTotalWithStaples).toBe(plan.fullTotal);
+    // soy sauce is shopped for like anything else
+    expect(plan.trips.flatMap((t) => t.items).map((i) => i.ingredient)).toContain('soy sauce');
+  });
+
+  it('a staple on sale nowhere contributes 0 to fullTotalWithStaples', () => {
+    const ings2 = [ing('chicken', 600, 'protein'), ing('msg', 5, 'pantry')];
+    const plan = optimizePlan(
+      ings2,
+      [basket(A, ings2, [item('Chicken', '$2.00/lb', undefined, 'A')])],
+      { assumeStaples: true },
+    );
+    expect(plan.staples).toEqual([{ ingredient: 'msg', neededGrams: 5 }]);
+    expect(plan.fullTotalWithStaples).toBeCloseTo(plan.fullTotal, 9);
+    expect(plan.neverOnSale).not.toContain('msg');
+  });
+
+  it('a pantry ingredient over the threshold is shopped for normally', () => {
+    const ings2 = [ing('sugar', 120, 'pantry')];
+    const plan = optimizePlan(
+      ings2,
+      [basket(A, ings2, [item('Sugar', '$2.99', '2 kg', 'A')])],
+      { assumeStaples: true },
+    );
+    expect(plan.staples).toEqual([]);
+    expect(plan.trips.flatMap((t) => t.items).map((i) => i.ingredient)).toEqual(['sugar']);
+    expect(plan.fullTotalWithStaples).toBe(plan.fullTotal);
   });
 });
