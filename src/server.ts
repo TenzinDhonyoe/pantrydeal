@@ -140,7 +140,7 @@ function itemDto(it: PlanItem, sub?: Substitution | null) {
     basis: it.basis,
     goodDeal: it.goodDeal,
     // Only surface when a genuinely different cut/form was substituted.
-    ...(sub && sub.differentForm ? { requestedAs: sub.requestedAs, differentForm: true } : {}),
+    ...(sub && sub.verdict === 'different' ? { requestedAs: sub.requestedAs, differentForm: true } : {}),
   };
 }
 
@@ -149,16 +149,54 @@ function itemDto(it: PlanItem, sub?: Substitution | null) {
  * cheapest way to actually buy the recipe, plus where else the misses are on
  * sale and what's not on sale anywhere.
  */
-function toResponse(result: PipelineResult, postal: string) {
+/**
+ * Resolve the cut/form verdict for every plan item (layered, cheapest first —
+ * see core/substitution.ts). The deterministic layers settle most pairs free;
+ * the lexically-ambiguous remainder goes to ONE batched, cached FormJudge call.
+ * If the judge is unavailable or fails, ambiguous resolves to 'different' (the
+ * honest default: over-warn rather than silently pass off a wrong cut).
+ */
+async function resolveSubstitutions(
+  recipe: Recipe,
+  items: PlanItem[],
+): Promise<Map<PlanItem, Substitution>> {
+  const asWrittenByName = new Map(recipe.ingredients.map((i) => [i.name, i.asWritten]));
+  const out = new Map<PlanItem, Substitution>();
+  const ambiguous: Array<{ item: PlanItem; sub: Substitution }> = [];
+
+  for (const it of items) {
+    const sub = describeSubstitution(asWrittenByName.get(it.ingredient), it.ingredient, it.item.name);
+    if (!sub) continue;
+    if (sub.verdict === 'ambiguous') ambiguous.push({ item: it, sub });
+    else out.set(it, sub);
+  }
+
+  if (ambiguous.length > 0 && liveAvailable()) {
+    try {
+      const { FormJudge } = await import('./integrations/formJudge.js');
+      const verdicts = await new FormJudge().judge(
+        ambiguous.map(({ sub }) => ({ requestedAs: sub.requestedAs, matched: sub.matched })),
+      );
+      ambiguous.forEach(({ item, sub }, i) => {
+        // null (judge failed) falls back to 'different' — honest over silent.
+        out.set(item, { ...sub, verdict: verdicts[i] === true ? 'same' : 'different' });
+      });
+      return out;
+    } catch {
+      // fall through to the honest default below
+    }
+  }
+  for (const { item, sub } of ambiguous) out.set(item, { ...sub, verdict: 'different' });
+  return out;
+}
+
+async function toResponse(result: PipelineResult, postal: string) {
   const { recipe, rankedStores } = result;
   const plan = optimizePlan(recipe.ingredients, rankedStores);
 
-  // The original phrasing per canonical ingredient (only set when the shopper
-  // wrote something more specific, e.g. "chicken thighs" -> "chicken"). Used to
-  // flag when the matched product is a different cut/form.
-  const asWrittenByName = new Map(recipe.ingredients.map((i) => [i.name, i.asWritten]));
-  const subFor = (it: PlanItem) =>
-    describeSubstitution(asWrittenByName.get(it.ingredient), it.ingredient, it.item.name);
+  // Cut/form honesty flags, resolved once for all items across the trips.
+  const subs = await resolveSubstitutions(recipe, plan.trips.flatMap((t) => t.items));
+  const subFor = (it: PlanItem) => subs.get(it) ?? null;
 
   // For ingredients on sale elsewhere (not at the chosen stores), point the
   // shopper at the cheapest other store by real pack cost.
@@ -364,7 +402,7 @@ export async function handleSearch(req: IncomingMessage, res: ServerResponse): P
 
   try {
     const result = await search({ postal, dinner, people, live });
-    sendJson(res, 200, toResponse(result, postal));
+    sendJson(res, 200, await toResponse(result, postal));
   } catch (err) {
     // NoRecipeError is a safe, user-facing domain error → 422 with its message.
     if (err instanceof NoRecipeError) {
@@ -406,7 +444,7 @@ export async function handleRecipe(req: IncomingMessage, res: ServerResponse): P
 
   try {
     const { result, source } = await priceRecipeFromSource({ postal, url, text, people });
-    sendJson(res, 200, { ...toResponse(result, postal), health: healthLensDto(result.recipe), source });
+    sendJson(res, 200, { ...(await toResponse(result, postal)), health: healthLensDto(result.recipe), source });
   } catch (err) {
     // Map the named parser errors to honest statuses + messages (no silent failures).
     const e = err instanceof Error ? err : new Error(String(err));
