@@ -20,6 +20,13 @@ export interface Ingredient {
   qtyGrams: number;
   category: Category;
   substitutes: string[];
+  /**
+   * The ingredient as written in the source recipe, with the cut/form preserved
+   * (e.g. "chicken thighs" when `name` was canonicalized to "chicken"). Display-
+   * only: matching still uses `name`, but this lets the UI flag honestly when the
+   * cheapest matched product is a different cut/form than the shopper asked for.
+   */
+  asWritten?: string;
 }
 
 /** A parsed recipe: a dish name plus its ingredient list. */

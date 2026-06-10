@@ -263,13 +263,18 @@ const EXTRACT_SYSTEM = `You extract a grocery shopping recipe from supplied reci
 of ingredient lines or the text of a recipe web page). Output ONLY the ingredients
 a shopper would BUY, using the GENERAL grocery search term — a canonical, singular
 noun. Prefer "chicken" over "chicken thigh", "cream" over "heavy cream", "olive oil"
-over "extra-virgin olive oil". Do NOT put amounts in the name. Convert every quantity
-to total grams for the whole recipe (assume the recipe's stated yield, or 4 servings
-if none). Ignore water, salt, pepper, and pantry items with no meaningful cost only
-if they have no quantity; otherwise include them. For "substitutes", give ONLY other
-names for the SAME food (e.g. "coriander" for cilantro), never a different food used
-as a cooking swap. Use [] when there is no true alias. If the content is not a recipe
-or has no ingredients, return an empty ingredients array.`;
+over "extra-virgin olive oil". Do NOT put amounts in the name. Also include "original":
+the ingredient as written in the recipe WITH its specific cut/form/qualifier but
+WITHOUT the amount (e.g. "bone-in chicken thighs", "heavy cream") — this is shown to
+the shopper so they can see when the cheapest matched product is a different cut.
+When the recipe is no more specific than the general term, set "original" equal to
+"name". Convert every quantity to total grams for the whole recipe (assume the
+recipe's stated yield, or 4 servings if none). Ignore water, salt, pepper, and pantry
+items with no meaningful cost only if they have no quantity; otherwise include them.
+For "substitutes", give ONLY other names for the SAME food (e.g. "coriander" for
+cilantro), never a different food used as a cooking swap. Use [] when there is no true
+alias. If the content is not a recipe or has no ingredients, return an empty
+ingredients array.`;
 
 const RESPONSE_SCHEMA = {
   type: 'object',
@@ -282,11 +287,12 @@ const RESPONSE_SCHEMA = {
         type: 'object',
         properties: {
           name: { type: 'string' },
+          original: { type: 'string' },
           qtyGrams: { type: 'number' },
           category: { type: 'string', enum: CATEGORIES },
           substitutes: { type: 'array', items: { type: 'string' } },
         },
-        required: ['name', 'qtyGrams', 'category', 'substitutes'],
+        required: ['name', 'original', 'qtyGrams', 'category', 'substitutes'],
       },
     },
   },
@@ -382,12 +388,19 @@ export class RecipeUrlParser {
       // Gemini returned non-JSON (e.g. truncated output) — recoverable.
       throw new NoRecipeFoundError('We couldn’t read that recipe. Try pasting the ingredients.');
     }
-    recipe.ingredients = (recipe.ingredients ?? []).map((i) => ({
-      name: String(i.name ?? '').trim().toLowerCase(), // canonical table key
-      qtyGrams: Number(i.qtyGrams) || 0,
-      category: (CATEGORIES.includes(i.category) ? i.category : 'other') as Category,
-      substitutes: Array.isArray(i.substitutes) ? i.substitutes.map((s) => String(s).toLowerCase()) : [],
-    })).filter((i) => i.name && i.qtyGrams > 0);
+    recipe.ingredients = (recipe.ingredients ?? []).map((i) => {
+      const name = String(i.name ?? '').trim().toLowerCase(); // canonical table key
+      const original = String((i as { original?: unknown }).original ?? '').trim().toLowerCase();
+      return {
+        name,
+        qtyGrams: Number(i.qtyGrams) || 0,
+        category: (CATEGORIES.includes(i.category) ? i.category : 'other') as Category,
+        substitutes: Array.isArray(i.substitutes) ? i.substitutes.map((s) => String(s).toLowerCase()) : [],
+        // Keep the original phrasing only when it adds specificity over the
+        // canonical name; equal/empty means there is nothing extra to surface.
+        asWritten: original && original !== name ? original : undefined,
+      };
+    }).filter((i) => i.name && i.qtyGrams > 0);
 
     if (recipe.ingredients.length === 0) {
       throw new NoRecipeFoundError('We couldn’t find a recipe there. Try pasting the ingredients.');

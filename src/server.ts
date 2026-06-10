@@ -21,9 +21,11 @@ import {
   nutritionForMatched,
   lowerCarbSwaps,
   validateRecipe,
+  describeSubstitution,
   type PipelineResult,
   type PlanItem,
   type Recipe,
+  type Substitution,
 } from './core/index.js';
 import {
   search,
@@ -117,8 +119,12 @@ function sendBodyError(res: ServerResponse, err: unknown): void {
   sendJson(res, 400, { error: 'Invalid JSON body.' });
 }
 
-/** Shape one plan item for the UI. */
-function itemDto(it: PlanItem) {
+/**
+ * Shape one plan item for the UI. `sub` (when the matched product is a different
+ * cut/form than the shopper wrote) lets the UI flag the substitution honestly
+ * instead of silently showing, say, drumsticks for "chicken thighs".
+ */
+function itemDto(it: PlanItem, sub?: Substitution | null) {
   return {
     ingredient: it.ingredient,
     neededGrams: it.neededGrams,
@@ -133,6 +139,8 @@ function itemDto(it: PlanItem) {
     leftoverGrams: Math.round(it.leftoverGrams),
     basis: it.basis,
     goodDeal: it.goodDeal,
+    // Only surface when a genuinely different cut/form was substituted.
+    ...(sub && sub.differentForm ? { requestedAs: sub.requestedAs, differentForm: true } : {}),
   };
 }
 
@@ -144,6 +152,13 @@ function itemDto(it: PlanItem) {
 function toResponse(result: PipelineResult, postal: string) {
   const { recipe, rankedStores } = result;
   const plan = optimizePlan(recipe.ingredients, rankedStores);
+
+  // The original phrasing per canonical ingredient (only set when the shopper
+  // wrote something more specific, e.g. "chicken thighs" -> "chicken"). Used to
+  // flag when the matched product is a different cut/form.
+  const asWrittenByName = new Map(recipe.ingredients.map((i) => [i.name, i.asWritten]));
+  const subFor = (it: PlanItem) =>
+    describeSubstitution(asWrittenByName.get(it.ingredient), it.ingredient, it.item.name);
 
   // For ingredients on sale elsewhere (not at the chosen stores), point the
   // shopper at the cheapest other store by real pack cost.
@@ -187,7 +202,7 @@ function toResponse(result: PipelineResult, postal: string) {
         address: t.store.address,
         distanceKm: t.store.distanceKm,
         realSubtotal: t.realSubtotal,
-        items: t.items.map(itemDto),
+        items: t.items.map((it) => itemDto(it, subFor(it))),
       })),
       bestDeals: plan.bestDeals.map((d) => ({ ingredient: d.ingredient, product: d.item.name, store: d.item.merchant })),
       onSaleElsewhere: plan.onSaleElsewhere.map((name) => ({ ingredient: name, ...(elsewhereFor(name) ?? {}) })),
@@ -276,7 +291,7 @@ function toWeekResponse(result: WeekResult, postal: string, people: number) {
         address: t.store.address,
         distanceKm: t.store.distanceKm,
         realSubtotal: t.realSubtotal,
-        items: t.items.map(itemDto),
+        items: t.items.map((it) => itemDto(it)),
       })),
       neverOnSale: cart.neverOnSale,
     },

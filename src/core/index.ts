@@ -10,6 +10,7 @@ export * from './optimize.js';
 export * from './nutritionTable.js';
 export * from './nutrition.js';
 export * from './swaps.js';
+export * from './substitution.js';
 export * from './recipeLibrary.js';
 export * from './mealPlan.js';
 export * from './recipePricing.js';
