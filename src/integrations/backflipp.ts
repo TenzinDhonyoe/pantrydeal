@@ -26,10 +26,20 @@ import type {
 const SEARCH_URL = 'https://backflipp.wishabi.com/flipp/items/search';
 
 /** How many term searches run at once (P1). The week-planner passes 40+ terms;
- * sequential round-trips made that pathologically slow. */
-const TERM_CONCURRENCY = 6;
+ * sequential round-trips were pathologically slow. Kept deliberately low (not max
+ * parallel): each response is ~440 KB and Flipp's unofficial endpoint rate-limits
+ * per IP, so a wide burst was tripping the throttle and failing whole requests. */
+const TERM_CONCURRENCY = 3;
 /** Per-term request timeout (P2): a hung upstream can't stall the whole batch. */
 const FETCH_TIMEOUT_MS = 8000;
+/** Extra attempts after the first on a TRANSIENT per-term failure (429/5xx/network). */
+const MAX_RETRIES = 2;
+/** Base backoff between term retries; grows linearly per attempt. Injectable for tests. */
+const DEFAULT_RETRY_DELAY_MS = 400;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /** Run async tasks with bounded concurrency over a shared index (worker pool). */
 async function mapPool<T, R>(items: T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
@@ -86,6 +96,8 @@ export interface BackflippOptions {
   /** Country code for the locale (default CA). */
   locale?: string;
   fetchImpl?: typeof fetch;
+  /** Base backoff (ms) between transient term retries. Defaults to 400; set 0 in tests. */
+  retryDelayMs?: number;
 }
 
 /** Pad a bare 3-char FSA to a format-valid full postal code. */
@@ -133,20 +145,22 @@ export class BackflippClient implements FlyerClient {
   private readonly terms: string[];
   private readonly locale: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly retryDelayMs: number;
 
   constructor(options: BackflippOptions) {
     this.geocoder = options.geocoder;
     this.terms = options.terms && options.terms.length > 0 ? options.terms : DEFAULT_TERMS;
     this.locale = `en-${(options.locale ?? 'CA').toLowerCase()}`;
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
   }
 
-  /** Fetch one term's items. Returns the items array on success, or null on any
-   * failure (non-ok / network / timeout) so the caller can skip it (P1, P2). */
-  private async fetchTerm(term: string, fullPostal: string): Promise<BackflippItem[] | null> {
-    const url =
-      `${SEARCH_URL}?locale=${encodeURIComponent(this.locale)}` +
-      `&postal_code=${encodeURIComponent(fullPostal)}&q=${encodeURIComponent(term)}`;
+  /** One HTTP attempt for a term. 'ok' on success; 'retry' on a transient failure
+   * (429 / 5xx / network / timeout) worth retrying; 'fail' on a permanent one (4xx). */
+  private async attemptTerm(
+    url: string,
+    term: string,
+  ): Promise<{ kind: 'ok'; items: BackflippItem[] } | { kind: 'retry' | 'fail' }> {
     // AbortController-based timeout (P2); the signal is threaded through fetchImpl so
     // the injection seam is preserved. clearTimeout in finally disarms the timer.
     const controller = new AbortController();
@@ -156,23 +170,42 @@ export class BackflippClient implements FlyerClient {
         headers: { accept: 'application/json' },
         signal: controller.signal,
       });
-      if (!res.ok) {
-        if (process.env.PANTRYDEAL_DEBUG) {
-          process.stderr.write(`[backflipp] term "${term}" failed (${res.status}) — skipping\n`);
-        }
-        return null;
+      if (res.ok) {
+        const body = (await res.json()) as BackflippResponse;
+        return { kind: 'ok', items: body.items ?? [] };
       }
-      const body = (await res.json()) as BackflippResponse;
-      return body.items ?? [];
+      // A rate-limit (429) or server error (5xx) may clear on retry; a 4xx won't.
+      const transient = res.status === 429 || res.status >= 500;
+      if (process.env.PANTRYDEAL_DEBUG) {
+        process.stderr.write(`[backflipp] term "${term}" failed (${res.status})${transient ? ' — will retry' : ''}\n`);
+      }
+      return { kind: transient ? 'retry' : 'fail' };
     } catch {
+      // Network error / timeout — transient by nature.
       if (process.env.PANTRYDEAL_DEBUG) {
         const reason = controller.signal.aborted ? 'timed out' : 'errored';
-        process.stderr.write(`[backflipp] term "${term}" ${reason} — skipping\n`);
+        process.stderr.write(`[backflipp] term "${term}" ${reason} — will retry\n`);
       }
-      return null;
+      return { kind: 'retry' };
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /** Fetch one term's items with bounded retry+backoff. Returns the items array on
+   * success, or null once a permanent failure or the retry budget is hit (P1, P2). */
+  private async fetchTerm(term: string, fullPostal: string): Promise<BackflippItem[] | null> {
+    const url =
+      `${SEARCH_URL}?locale=${encodeURIComponent(this.locale)}` +
+      `&postal_code=${encodeURIComponent(fullPostal)}&q=${encodeURIComponent(term)}`;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const result = await this.attemptTerm(url, term);
+      if (result.kind === 'ok') return result.items;
+      if (result.kind === 'fail') return null; // permanent (4xx) — retrying won't help
+      if (attempt === MAX_RETRIES) return null; // out of retries
+      await sleep(this.retryDelayMs * (attempt + 1)); // linear backoff between tries
+    }
+    return null;
   }
 
   async getDeals(postal: string): Promise<FlyerData> {
@@ -186,10 +219,12 @@ export class BackflippClient implements FlyerClient {
       this.fetchTerm(term, fullPostal),
     );
 
-    // If EVERY term failed, the source is down — surface it rather than silently
-    // returning an empty flyer (which would read as "no deals", a wrong answer).
+    // If EVERY term failed (even after retries), the source is unreachable or
+    // rate-limiting — surface it rather than silently returning an empty flyer
+    // (which would read as "no deals", a wrong answer). The user-facing layer
+    // already turns this into a generic "try again" message.
     if (perTerm.every((r) => r === null)) {
-      throw new Error('Backflipp request failed for all search terms (source unreachable).');
+      throw new Error('Backflipp unavailable after retries (the flyer source may be rate-limiting). Try again shortly.');
     }
 
     const storesById = new Map<string, Store>();
